@@ -1,0 +1,9 @@
+dist/
+node_modules/
+.venv/
+.uv/
+.uv-cache/
+__pycache__/
+*.pyc
+.runtime_arm.yaml
+*.log
