@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_URL="${REBOT_ARM_WEBUI_REPO_URL:-https://github.com/<YOUR_GITHUB_USER>/<YOUR_REPO>.git}"
+REPO_URL="${REBOT_ARM_WEBUI_REPO_URL:-https://github.com/Seeed-Projects/rebot_arm_webui.git}"
 INSTALL_DIR="${REBOT_ARM_WEBUI_DIR:-$HOME/robot-arm-webui}"
 
 if [ -e "$INSTALL_DIR/.git" ]; then

@@ -43,8 +43,8 @@ rebot-arm-webui/
 ## 本地安装
 
 ```bash
-git clone <YOUR_GITHUB_REPO_URL>
-cd robot-arm-webui
+git clone https://github.com/Seeed-Projects/rebot_arm_webui.git
+cd rebot_arm_webui
 ./scripts/install.sh
 ```
 
@@ -65,14 +65,14 @@ http://127.0.0.1:8000/
 发布到 GitHub 后，可直接使用：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/<YOUR_GITHUB_USER>/<YOUR_REPO>/v0.1/scripts/bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Seeed-Projects/rebot_arm_webui/v0.1/scripts/bootstrap.sh | bash
 ```
 
 如果使用自定义仓库地址，也可以：
 
 ```bash
-REBOT_ARM_WEBUI_REPO_URL=https://github.com/<YOUR_GITHUB_USER>/<YOUR_REPO>.git \
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/<YOUR_GITHUB_USER>/<YOUR_REPO>/v0.1/scripts/bootstrap.sh)"
+REBOT_ARM_WEBUI_REPO_URL=git@github.com:Seeed-Projects/rebot_arm_webui.git \
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/Seeed-Projects/rebot_arm_webui/v0.1/scripts/bootstrap.sh)"
 ```
 
 ## 开发命令
