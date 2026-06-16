@@ -11,6 +11,7 @@
     "install:local": "./scripts/install.sh"
   },
   "dependencies": {
+    "@iconify/react": "^6.0.2",
     "three": "^0.165.0",
     "urdf-loader": "^0.12.6",
     "vite": "^5.4.0"

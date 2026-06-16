@@ -4,14 +4,20 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>rebot arm webui</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap"
+      rel="stylesheet"
+    />
+    <script src="https://code.iconify.design/iconify-icon/3.1.1/iconify-icon.min.js"></script>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <div class="app-shell">
       <aside class="sidebar" data-i18n-aria-label="aria.mainNav" aria-label="主导航">
         <div class="brand">
-          <div class="brand-mark">R</div>
-          <div>
+          <div class="brand-text">
             <strong data-i18n="brand.title">rebot arm webui</strong>
             <span data-i18n="brand.subtitle">DevArm Console</span>
           </div>
@@ -19,36 +25,27 @@
 
         <nav class="nav-list">
           <button class="nav-item active" type="button" data-view="control">
-            <span class="nav-icon">⌁</span>
             <span data-i18n="nav.control">控制台</span>
           </button>
           <button class="nav-item" type="button" data-view="motion">
-            <span class="nav-icon">◎</span>
             <span data-i18n="nav.motion">运动规划</span>
           </button>
           <button class="nav-item" type="button" data-view="apps">
-            <span class="nav-icon">▦</span>
             <span data-i18n="nav.apps">应用中心</span>
           </button>
           <button class="nav-item" type="button" data-view="diagnostics">
-            <span class="nav-icon">◌</span>
             <span data-i18n="nav.diagnostics">诊断</span>
           </button>
         </nav>
-
-        <div class="connection-box">
-          <span class="label" data-i18n="service.label">后台服务</span>
-          <strong id="serviceState">Mock 模式</strong>
-          <span id="serviceEndpoint">same-origin REST API</span>
-        </div>
       </aside>
 
       <main class="workspace">
         <header class="topbar">
-          <div>
+          <div class="topbar-left">
             <p class="eyebrow" id="pageEyebrow">rebot arm webui</p>
             <h1 id="pageTitle">实时控制台</h1>
           </div>
+
           <div class="system-actions">
             <label class="language-select">
               <span data-i18n="topbar.language">语言</span>
@@ -57,11 +54,15 @@
                 <option value="en-US" data-i18n="language.enUS">English</option>
               </select>
             </label>
-            <div class="connection-status" id="connectionStatus" data-connected="false">
+
+            <div class="connection-status badge badge-inactive" id="connectionStatus" data-connected="false">
               <span class="status-dot" aria-hidden="true"></span>
-              <strong data-i18n="connection.disconnected">未连接</strong>
+              <span class="connection-status-label" data-i18n="connection.disconnected">未连接</span>
             </div>
-            <button class="secondary-button topbar-connect-button" id="enableButton" type="button" data-i18n="button.connectArm">连接机械臂</button>
+
+            <button class="topbar-connect-button btn btn-primary" id="enableButton" type="button" data-i18n="button.connectArm">
+              连接机械臂
+            </button>
           </div>
         </header>
 
@@ -73,57 +74,100 @@
                   <h2 data-i18n="panel.armPoseTitle">机械臂姿态</h2>
                   <p data-i18n="panel.armPoseSubtitle">6 轴关节角度与末端趋势</p>
                 </div>
+
                 <div class="segmented" role="tablist" data-i18n-aria-label="aria.viewMode" aria-label="视图模式">
                   <button class="segment active" type="button" data-camera="side" data-i18n="camera.side">侧视</button>
                   <button class="segment" type="button" data-camera="top" data-i18n="camera.top">俯视</button>
                 </div>
               </div>
+
               <div id="armViewport" data-i18n-aria-label="aria.armViewport" aria-label="机械臂 3D URDF 仿真视图">
                 <div class="viewport-overlay" id="viewportOverlay" data-i18n="overlay.loadingUrdf">正在加载 URDF 模型...</div>
               </div>
             </div>
           </div>
 
-          <div class="main-column">
+          <div class="main-column right-rail">
             <div class="panel command-panel">
               <div class="panel-head compact">
-                <h2 data-i18n="panel.manualControl">手动控制</h2>
+                <div>
+                  <h2 data-i18n="panel.manualControl">手动控制</h2>
+                  <p>Joint + IK workflow</p>
+                </div>
               </div>
 
-              <h3 class="control-subhead" data-i18n="panel.jointControl">关节控制</h3>
-              <div class="joint-list" id="jointList"></div>
+              <div class="command-section">
+                <h3 class="control-subhead" data-i18n="panel.jointControl">关节控制</h3>
+                <div class="joint-list" id="jointList"></div>
+              </div>
 
-              <div class="cartesian-form" id="cartesianForm">
+              <div class="command-section">
                 <h3 class="control-subhead" data-i18n="panel.ik">运动学逆解</h3>
-                <div class="cartesian-row">
-                  <label>X <input type="number" value="0.31" step="0.01" data-axis="x" /></label>
-                  <label>Y <input type="number" value="0.02" step="0.01" data-axis="y" /></label>
-                  <label>Z <input type="number" value="0.24" step="0.01" data-axis="z" /></label>
+                <div class="cartesian-form" id="cartesianForm">
+                  <div class="cartesian-row">
+                    <label>
+                      <span>X (m)</span>
+                      <input type="number" value="0.31" step="0.01" data-axis="x" />
+                    </label>
+                    <label>
+                      <span>Y (m)</span>
+                      <input type="number" value="0.02" step="0.01" data-axis="y" />
+                    </label>
+                    <label>
+                      <span>Z (m)</span>
+                      <input type="number" value="0.24" step="0.01" data-axis="z" />
+                    </label>
+                  </div>
+                  <div class="cartesian-row">
+                    <label>
+                      <span>Roll (°)</span>
+                      <input type="number" value="0" step="1" data-axis="roll" />
+                    </label>
+                    <label>
+                      <span>Pitch (°)</span>
+                      <input type="number" value="18" step="1" data-axis="pitch" />
+                    </label>
+                    <label>
+                      <span>Yaw (°)</span>
+                      <input type="number" value="0" step="1" data-axis="yaw" />
+                    </label>
+                  </div>
                 </div>
-                <div class="cartesian-row">
-                  <label>Roll <input type="number" value="0" step="1" data-axis="roll" /></label>
-                  <label>Pitch <input type="number" value="18" step="1" data-axis="pitch" /></label>
-                  <label>Yaw <input type="number" value="0" step="1" data-axis="yaw" /></label>
-                </div>
-                <button class="secondary-button solve-button" id="solveIkButton" type="button" data-i18n="button.solveIk">计算逆解</button>
+                <button class="btn btn-default solve-button secondary-button" id="solveIkButton" type="button" data-i18n="button.solveIk">
+                  计算逆解
+                </button>
+                <div class="solver-status" id="solverStatus" data-i18n="solver.ready">FK/IK 就绪</div>
               </div>
-              <div class="solver-status" id="solverStatus" data-i18n="solver.ready">FK/IK 就绪</div>
 
-              <div class="button-row">
-                <button class="secondary-button" id="homeButton" type="button" data-i18n="button.home">初始位置</button>
-                <button class="secondary-button" id="readRealPoseButton" type="button" disabled data-i18n="button.readRealPose">获取真机位置</button>
-                <button class="secondary-button" id="sendTargetButton" type="button" data-i18n="button.sendTarget">发送目标位置</button>
+              <div class="command-section">
+                <h3 class="control-subhead">操作</h3>
+                <div class="command-actions">
+                  <button class="btn btn-default secondary-button" id="homeButton" type="button" data-i18n="button.home">初始位置</button>
+                  <button class="btn btn-default secondary-button" id="readRealPoseButton" type="button" disabled data-i18n="button.readRealPose">
+                    获取真机位置
+                  </button>
+                  <button class="btn btn-primary primary-button" id="sendTargetButton" type="button" data-i18n="button.sendTarget">
+                    发送目标位置
+                  </button>
+                </div>
               </div>
             </div>
 
             <div class="panel gripper-panel">
               <div class="panel-head compact">
-                <h2 data-i18n="panel.gripper">夹爪控制</h2>
+                <div>
+                  <h2 data-i18n="panel.gripper">夹爪控制</h2>
+                  <p>End effector actions</p>
+                </div>
               </div>
-              <p class="panel-note" data-i18n="panel.gripperNote">夹爪控制仅在连接真实机械臂后激活；仿真环境中无法显示夹爪开合效果。</p>
+
+              <p class="panel-note" data-i18n="panel.gripperNote">
+                夹爪控制仅在连接真实机械臂后激活；仿真环境中无法显示夹爪开合效果。
+              </p>
+
               <div class="button-row gripper-actions">
-                <button class="secondary-button" id="gripperOpenButton" type="button" data-i18n="button.gripperOpen">打开夹爪</button>
-                <button class="secondary-button" id="gripperCloseButton" type="button" data-i18n="button.gripperClose">闭合夹爪</button>
+                <button class="btn btn-default secondary-button" id="gripperOpenButton" type="button" data-i18n="button.gripperOpen">打开夹爪</button>
+                <button class="btn btn-default secondary-button" id="gripperCloseButton" type="button" data-i18n="button.gripperClose">闭合夹爪</button>
               </div>
             </div>
           </div>
@@ -144,17 +188,41 @@
         </section>
 
         <section class="view diagnostics-view" id="diagnosticsView">
-          <div class="panel maintenance-panel">
-            <h2 data-i18n="maintenance.title">页面正在维护</h2>
-            <p data-i18n="maintenance.diagnostics">诊断窗口暂时关闭，当前页面正在维护。</p>
+          <div class="panel diagnostics-log-panel">
+            <div class="panel-head">
+              <div>
+                <h2 data-i18n="nav.diagnostics">诊断</h2>
+                <p>Telemetry, command history, backend events</p>
+              </div>
+            </div>
+
+            <div class="diagnostics-logs">
+              <section>
+                <h3 class="control-subhead">Client Logs</h3>
+                <div class="log-list" id="logList"></div>
+              </section>
+              <section>
+                <h3 class="control-subhead">Backend Logs</h3>
+                <div class="log-list" id="backendLogList"></div>
+              </section>
+            </div>
           </div>
         </section>
       </main>
     </div>
 
     <div class="app-log-buffer" hidden aria-hidden="true">
-      <div id="logList"></div>
-      <div id="backendLogList"></div>
+      <span id="serviceState">Mock 模式</span>
+      <span id="sidebarModeBadge">REST API</span>
+      <span id="serviceEndpoint">same-origin REST API</span>
+      <span id="modeText">Position Control</span>
+      <span id="tcpText">0.31, 0.02, 0.24 m</span>
+      <span id="rpyText">0.0, 18.0, 0.0°</span>
+      <span id="loadText">16%</span>
+      <span id="voltageText">24.0 V</span>
+      <span id="tempText">35.0 °C</span>
+      <span id="torqueText">0.8 Nm</span>
+      <span id="errorText">0.3°</span>
     </div>
 
     <div class="modal-backdrop" id="armDetectModal" hidden>
@@ -162,12 +230,18 @@
         <div class="modal-head">
           <h2 id="armDetectTitle" data-i18n="modal.detectedTitle">检测到真实机械臂</h2>
         </div>
-        <p id="armDetectText" data-i18n="modal.detectedPrompt">后台扫描到电机反馈，是否连接真实机械臂？</p>
-        <div class="detected-motors" id="detectedMotors"></div>
+
+        <div class="modal-body">
+          <p id="armDetectText" data-i18n="modal.detectedPrompt">后台扫描到电机反馈，是否连接真实机械臂？</p>
+          <div class="detected-motors" id="detectedMotors"></div>
+        </div>
+
         <div class="modal-actions">
-          <button class="secondary-button" id="armDetectCancel" type="button" data-i18n="button.notNow">暂不连接</button>
-          <button class="secondary-button" id="serialPermissionButton" type="button" hidden data-i18n="button.configureSerial">配置串口权限</button>
-          <button class="primary-button" id="armDetectConfirm" type="button" data-i18n="button.connectArm">连接机械臂</button>
+          <button class="btn btn-default secondary-button" id="armDetectCancel" type="button" data-i18n="button.notNow">暂不连接</button>
+          <button class="btn btn-default secondary-button" id="serialPermissionButton" type="button" hidden data-i18n="button.configureSerial">
+            配置串口权限
+          </button>
+          <button class="btn btn-primary primary-button" id="armDetectConfirm" type="button" data-i18n="button.connectArm">连接机械臂</button>
         </div>
       </div>
     </div>

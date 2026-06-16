@@ -18,6 +18,18 @@ const fallbackSimConfig = {
   },
 };
 
+const scenePalette = {
+  viewportBackground: new THREE.Color(0xf1f5f5),
+  hemisphereSky: 0xffffff,
+  hemisphereGround: 0xcce3e7,
+  fillLight: 0x99c7cf,
+  gridMajor: 0x99c7cf,
+  gridMinor: 0xe5e5e5,
+  floor: 0xfafafa,
+  tcpMarker: 0x8fc31f,
+  robotMesh: 0xa3a3a3,
+};
+
 const joints = [
   { name: "joint1", urdfName: "joint1", motorId: "0x01", feedbackId: "0x11", model: "4340P", min: -160, max: 160, angle: 0 },
   { name: "joint2", urdfName: "joint2", motorId: "0x02", feedbackId: "0x12", model: "4340P", min: -180, max: 0, angle: 0 },
@@ -352,6 +364,7 @@ const els = {
   systemActions: document.querySelector(".system-actions"),
   languageSelect: document.querySelector("#languageSelect"),
   connectionStatus: document.querySelector("#connectionStatus"),
+  sidebarModeBadge: document.querySelector("#sidebarModeBadge"),
   jointList: document.querySelector("#jointList"),
   logList: document.querySelector("#logList"),
   backendLogList: document.querySelector("#backendLogList"),
@@ -381,6 +394,53 @@ const els = {
   serialPermissionButton: document.querySelector("#serialPermissionButton"),
   armDetectConfirm: document.querySelector("#armDetectConfirm"),
 };
+
+function setBadgeVariant(element, variant) {
+  if (!element) return;
+  element.classList.remove("badge-success", "badge-warning", "badge-error", "badge-info", "badge-inactive");
+  element.classList.add(`badge-${variant}`);
+}
+
+function setButtonContent(button, icon, label) {
+  if (!button) return;
+  button.innerHTML = `<iconify-icon icon="${icon}" aria-hidden="true"></iconify-icon><span>${label}</span>`;
+}
+
+function setConnectionIndicator({ connected, label }) {
+  if (!els.connectionStatus) return;
+  els.connectionStatus.dataset.connected = String(connected);
+  setBadgeVariant(els.connectionStatus, connected ? "success" : "inactive");
+  els.connectionStatus.innerHTML = `
+    <span class="status-dot" aria-hidden="true"></span>
+    <iconify-icon icon="${connected ? "mingcute:check-circle-line" : "mingcute:close-circle-line"}" aria-hidden="true"></iconify-icon>
+    <strong>${label}</strong>
+  `;
+}
+
+function setSidebarModeBadge() {
+  if (!els.sidebarModeBadge) return;
+
+  if (!state.backendOnline) {
+    setBadgeVariant(els.sidebarModeBadge, "inactive");
+    els.sidebarModeBadge.innerHTML = `<iconify-icon icon="mingcute:cloud-off-line" aria-hidden="true"></iconify-icon><span>Mock</span>`;
+    return;
+  }
+
+  if (state.connected) {
+    setBadgeVariant(els.sidebarModeBadge, "success");
+    els.sidebarModeBadge.innerHTML = `<iconify-icon icon="mingcute:check-circle-line" aria-hidden="true"></iconify-icon><span>Live</span>`;
+    return;
+  }
+
+  if (state.interfacePresent) {
+    setBadgeVariant(els.sidebarModeBadge, "warning");
+    els.sidebarModeBadge.innerHTML = `<iconify-icon icon="mingcute:alert-line" aria-hidden="true"></iconify-icon><span>Detect</span>`;
+    return;
+  }
+
+  setBadgeVariant(els.sidebarModeBadge, "info");
+  els.sidebarModeBadge.innerHTML = `<iconify-icon icon="mingcute:ai-line" aria-hidden="true"></iconify-icon><span>REST API</span>`;
+}
 
 const viewMeta = {
   control: { eyebrowKey: "view.controlEyebrow", titleKey: "view.controlTitle" },
@@ -442,7 +502,7 @@ function setLanguage(locale) {
 }
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0xe8edf1);
+scene.background = scenePalette.viewportBackground;
 
 const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 100);
 camera.up.set(0, 0, 1);
@@ -472,7 +532,7 @@ try {
   setOverlay({ key: "overlay.viewerInitFailed", vars: { error: error.message } }, true);
 }
 
-const ambient = new THREE.HemisphereLight(0xffffff, 0x7f8790, 2.2);
+const ambient = new THREE.HemisphereLight(scenePalette.hemisphereSky, scenePalette.hemisphereGround, 2.2);
 scene.add(ambient);
 
 const keyLight = new THREE.DirectionalLight(0xffffff, 2.4);
@@ -481,17 +541,17 @@ keyLight.castShadow = true;
 keyLight.shadow.mapSize.set(2048, 2048);
 scene.add(keyLight);
 
-const fillLight = new THREE.DirectionalLight(0x88c7d1, 0.9);
+const fillLight = new THREE.DirectionalLight(scenePalette.fillLight, 0.9);
 fillLight.position.set(-1.2, 1.1, 0.8);
 scene.add(fillLight);
 
-const grid = new THREE.GridHelper(1.2, 24, 0x98a5af, 0xd0d7dd);
+const grid = new THREE.GridHelper(1.2, 24, scenePalette.gridMajor, scenePalette.gridMinor);
 grid.rotation.x = Math.PI / 2;
 scene.add(grid);
 
 const floor = new THREE.Mesh(
   new THREE.CircleGeometry(0.72, 96),
-  new THREE.MeshStandardMaterial({ color: 0xf8fafb, roughness: 0.74, metalness: 0.05 }),
+  new THREE.MeshStandardMaterial({ color: scenePalette.floor, roughness: 0.74, metalness: 0.05 }),
 );
 floor.receiveShadow = true;
 floor.position.z = -0.004;
@@ -499,7 +559,7 @@ scene.add(floor);
 
 const tcpMarker = new THREE.Mesh(
   new THREE.SphereGeometry(0.014, 24, 16),
-  new THREE.MeshStandardMaterial({ color: 0xd8583a, roughness: 0.42, metalness: 0.08 }),
+  new THREE.MeshStandardMaterial({ color: scenePalette.tcpMarker, roughness: 0.42, metalness: 0.08 }),
 );
 scene.add(tcpMarker);
 
@@ -728,7 +788,7 @@ function normalizeRobot(robot) {
       child.castShadow = true;
       child.receiveShadow = true;
       child.material = new THREE.MeshStandardMaterial({
-        color: child.material?.color ?? new THREE.Color(0x9ea5aa),
+        color: child.material?.color ?? new THREE.Color(scenePalette.robotMesh),
         roughness: 0.58,
         metalness: 0.22,
       });
@@ -829,7 +889,7 @@ function loadRobotModel() {
       (geometry) => {
         const mesh = new THREE.Mesh(
           geometry,
-          new THREE.MeshStandardMaterial({ color: 0x9ea5aa, roughness: 0.58, metalness: 0.2 }),
+          new THREE.MeshStandardMaterial({ color: scenePalette.robotMesh, roughness: 0.58, metalness: 0.2 }),
         );
         done(mesh);
       },
@@ -912,19 +972,31 @@ function updateConnectionUi() {
     ? state.connected ? t("service.realConnected") : state.interfacePresent ? t("service.commDetected") : t("service.backendOnline")
     : t("service.mock");
   els.serviceEndpoint.textContent = state.backendOnline ? window.location.origin : t("service.sameOrigin");
-  els.connectionStatus.dataset.connected = String(state.connected);
-  els.connectionStatus.querySelector("strong").textContent = state.connected ? t("connection.connected") : t("connection.disconnected");
-  els.enableButton.textContent = state.connected ? t("button.disconnectArm") : t("button.connectArm");
+  setConnectionIndicator({
+    connected: state.connected,
+    label: state.connected ? t("connection.connected") : t("connection.disconnected"),
+  });
+  setSidebarModeBadge();
+  setButtonContent(
+    els.enableButton,
+    state.connected ? "mingcute:link-unlink-line" : "mingcute:plug-line",
+    state.connected ? t("button.disconnectArm") : t("button.connectArm"),
+  );
   els.enableButton.disabled = state.connected ? false : state.estop;
   if (els.readRealPoseButton) {
     els.readRealPoseButton.disabled = !state.connected;
     if (!els.readRealPoseButton.dataset.loading) {
-      els.readRealPoseButton.textContent = t("button.readRealPose");
+      setButtonContent(els.readRealPoseButton, "mingcute:radar-line", t("button.readRealPose"));
     }
   }
   if (els.modeText) els.modeText.textContent = state.estop ? t("mode.estopLocked") : t(`mode.${state.mode}`);
   if (els.gripperOpenButton) els.gripperOpenButton.disabled = !state.connected || state.gripperBusy;
   if (els.gripperCloseButton) els.gripperCloseButton.disabled = !state.connected || state.gripperBusy;
+  setButtonContent(els.solveIkButton, "mingcute:ai-line", t("button.solveIk"));
+  setButtonContent(document.querySelector("#homeButton"), "mingcute:home-3-line", t("button.home"));
+  setButtonContent(document.querySelector("#sendTargetButton"), "mingcute:send-plane-line", t("button.sendTarget"));
+  setButtonContent(els.gripperOpenButton, "mingcute:open-door-line", t("button.gripperOpen"));
+  setButtonContent(els.gripperCloseButton, "mingcute:lock-line", t("button.gripperClose"));
 }
 
 function applyArmDetection(payload) {
@@ -962,7 +1034,12 @@ function showArmDetectModal(mode = state.armModalMode) {
 
   if (isMissing) {
     els.armDetectText.textContent = t("modal.noArmPrompt");
-    els.detectedMotors.innerHTML = "";
+    els.detectedMotors.innerHTML = `
+      <span class="detected-motor">
+        <iconify-icon icon="mingcute:warning-line" aria-hidden="true"></iconify-icon>
+        <span>${t("modal.noArmTitle")}</span>
+      </span>
+    `;
     els.armDetectModal.hidden = false;
     return;
   }
@@ -974,7 +1051,12 @@ function showArmDetectModal(mode = state.armModalMode) {
     els.serialPermissionButton.hidden = false;
     els.armDetectConfirm.disabled = true;
     els.armDetectText.textContent = state.permissionHint || t("modal.permissionHintDefault");
-    els.detectedMotors.innerHTML = `<span class="detected-motor">sudo chmod 666 /dev/ttyACM*</span>`;
+    els.detectedMotors.innerHTML = `
+      <span class="detected-motor">
+        <iconify-icon icon="mingcute:terminal-box-line" aria-hidden="true"></iconify-icon>
+        <span>sudo chmod 666 /dev/ttyACM*</span>
+      </span>
+    `;
   } else {
     els.armDetectText.textContent = count > 0
       ? t("modal.detectedAsk", { count })
@@ -982,7 +1064,12 @@ function showArmDetectModal(mode = state.armModalMode) {
         ? t("modal.connectGuide")
         : t("modal.interfaceGuide");
     els.detectedMotors.innerHTML = state.detectedMotors
-      .map((motor) => `<span class="detected-motor">${motor.name ?? t("modal.motorFallback")} · 0x${Number(motor.motor_id ?? 0).toString(16).padStart(2, "0")}</span>`)
+      .map((motor) => `
+        <span class="detected-motor">
+          <iconify-icon icon="mingcute:cpu-line" aria-hidden="true"></iconify-icon>
+          <span>${motor.name ?? t("modal.motorFallback")} · 0x${Number(motor.motor_id ?? 0).toString(16).padStart(2, "0")}</span>
+        </span>
+      `)
       .join("");
   }
   els.armDetectModal.hidden = false;
@@ -1296,7 +1383,7 @@ async function readRealArmPose() {
   if (!state.connected) return;
   els.readRealPoseButton.disabled = true;
   els.readRealPoseButton.dataset.loading = "true";
-  els.readRealPoseButton.textContent = t("button.reading");
+  setButtonContent(els.readRealPoseButton, "mingcute:loading-3-line", t("button.reading"));
   try {
     const robotState = await refreshRobotState();
     if (robotState?.joints_rad) {
@@ -1309,7 +1396,6 @@ async function readRealArmPose() {
     }
   } finally {
     delete els.readRealPoseButton.dataset.loading;
-    els.readRealPoseButton.textContent = t("button.readRealPose");
     updateConnectionUi();
   }
 }

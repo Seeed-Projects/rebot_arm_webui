@@ -7,3 +7,10 @@ __pycache__/
 *.pyc
 .runtime_arm.yaml
 *.log
+DESIGN.md
+AGENTS.md
+.cursorrules
+.cursor/rules/csg-*.mdc
+.opencode/AGENTS.md
+.crush/AGENTS.md
+assets/logo/
