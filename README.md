@@ -2,7 +2,7 @@
 
 `REBOT ARM WEBUI` is an integrated control interface for the `reBot Arm B601`. The project combines the Web UI, URDF visualization, serial-device detection, arm connection flow, gripper control, diagnostics, and the local HTTP service in a single repository for straightforward deployment.
 
-## V0.2 Highlights
+## V0.2.1 Highlights
 
 - Smooth Chinese and English language switching
 - Arm presence detection before connection, with guided connection prompts
@@ -12,6 +12,7 @@
 - Gripper open and close controls
 - Diagnostics page with per-motor tabs, zero recalibration, and duplicate motor filtering by `feedback_id`
 - Application Center with curated reBot Arm project links
+- One-line installation with automatic systemd service setup and startup
 
 ## Requirements
 
@@ -59,19 +60,30 @@ Default URL:
 http://127.0.0.1:8000/
 ```
 
-## One-Line Install
+## One-Line Install And Run
 
-Install the published `v0.2` version directly from GitHub:
+Install the published `v0.2.1` version from GitHub, create a `systemd` service, and start it immediately:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Seeed-Projects/rebot_arm_webui/v0.2/scripts/bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Seeed-Projects/rebot_arm_webui/v0.2.1/scripts/bootstrap.sh | bash
 ```
 
-To install from a custom fork or mirror:
+By default the installer creates `rebot-arm-webui.service` and starts it on port `8000`.
+
+Useful service commands:
+
+```bash
+sudo systemctl status rebot-arm-webui
+sudo systemctl restart rebot-arm-webui
+sudo journalctl -u rebot-arm-webui -f
+```
+
+To install from a custom fork, mirror, or port:
 
 ```bash
 REBOT_ARM_WEBUI_REPO_URL=git@github.com:Seeed-Projects/rebot_arm_webui.git \
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/Seeed-Projects/rebot_arm_webui/v0.2/scripts/bootstrap.sh)"
+REBOT_ARM_WEBUI_PORT=8001 \
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/Seeed-Projects/rebot_arm_webui/v0.2.1/scripts/bootstrap.sh)"
 ```
 
 ## Development

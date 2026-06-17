@@ -30,4 +30,6 @@ cd "$ROOT"
 npm ci
 npm run build
 
-echo "Install complete. Start with: ./scripts/start.sh"
+echo "Install complete."
+echo "Run locally with: ./scripts/start.sh"
+echo "Install a systemd service with: ./scripts/setup-systemd.sh"
