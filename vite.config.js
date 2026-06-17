@@ -13,6 +13,7 @@ export default defineConfig({
       "/home": "http://localhost:8000",
       "/gripper": "http://localhost:8000",
       "/permissions": "http://localhost:8000",
+      "/debug": "http://localhost:8000",
     },
   },
   build: {

@@ -67,10 +67,17 @@ const state = {
   activeView: "control",
   animationFrameId: null,
   lastBackgroundHealthAt: 0,
+  lastBackgroundStateAt: 0,
   lastBackendLogAt: 0,
   locale: "zh-CN",
   solverStatus: { message: { key: "solver.ready" }, warn: false },
   overlay: { message: { key: "overlay.loadingUrdf" }, persistent: true },
+  lastHealth: null,
+  lastRobotState: null,
+  diagnosticsBusyAction: "",
+  diagnosticsBusyLabel: "",
+  diagnosticsStatusMessage: { key: "diagnostics.statusIdle" },
+  selectedMotorName: "",
 };
 
 
@@ -86,7 +93,7 @@ const translations = {
       armViewport: "机械臂 3D URDF 仿真视图",
     },
     language: { zhCN: "中文", enUS: "English" },
-    nav: { control: "控制台", motion: "运动规划", apps: "应用中心", diagnostics: "诊断" },
+    nav: { control: "控制台", apps: "应用中心", diagnostics: "诊断" },
     service: {
       label: "后台服务",
       sameOrigin: "same-origin REST API",
@@ -99,8 +106,6 @@ const translations = {
     view: {
       controlEyebrow: "rebot arm webui",
       controlTitle: "实时控制台",
-      motionEyebrow: "运动规划",
-      motionTitle: "运动规划",
       appsEyebrow: "应用中心",
       appsTitle: "应用中心",
       diagnosticsEyebrow: "诊断",
@@ -112,6 +117,10 @@ const translations = {
       connectArm: "连接机械臂",
       refreshStatus: "刷新状态",
       disconnectArm: "断开连接",
+      refreshScan: "刷新并扫描",
+      fetchFeedback: "读取反馈",
+      enableDrive: "使能机械臂",
+      disableDrive: "失能机械臂",
       solveIk: "计算逆解",
       home: "初始位置",
       readRealPose: "获取真机位置",
@@ -123,6 +132,7 @@ const translations = {
       gotIt: "知道了",
       configureSerial: "配置串口权限",
       configuring: "配置中...",
+      calibrateZero: "机械臂校准",
     },
     panel: {
       armPoseTitle: "机械臂姿态",
@@ -136,9 +146,82 @@ const translations = {
     camera: { side: "侧视", top: "俯视" },
     maintenance: {
       title: "页面正在维护",
-      motion: "运动规划功能后续开发。",
       apps: "应用中心功能后续开发。",
       diagnostics: "诊断窗口暂时关闭，当前页面正在维护。",
+    },
+    appCenter: {
+      title: "机械臂项目",
+      subtitle: "精选 Seeed reBot Arm 项目，点击卡片可直接跳转到对应页面。",
+      openProject: "查看项目",
+      graspnet: {
+        tag: "视觉抓取",
+        title: "GraspNet Visual Grasping",
+        desc: "基于 GraspNet 的视觉抓取方案，适合快速验证识别、抓取与机械臂联动流程。",
+      },
+      voice: {
+        tag: "语音控制",
+        title: "Voice Control reBot Arm",
+        desc: "通过语音指令驱动机械臂动作，适合展示自然交互与执行链路整合能力。",
+      },
+      openclaw: {
+        tag: "端侧智能体",
+        title: "NemoClaw on Jetson Thor",
+        desc: "结合 NVIDIA Jetson Thor 与 NemoClaw，构建更强的端侧机械臂控制体验。",
+      },
+      lerobot: {
+        tag: "具身学习",
+        title: "LeRobot for reBot Arm",
+        desc: "围绕 LeRobot 训练与部署流程，展示机械臂数据采集、学习和复现能力。",
+      },
+    },
+    diagnostics: {
+      subtitle: "点击调试、实时状态与后端事件",
+      summaryTitle: "状态摘要",
+      actionsTitle: "点击调试",
+      actionNote: "参考 MotorBridge 的使能与状态读取流程，适合快速验证串口、反馈和使能状态。",
+      feedbackTitle: "电机调试",
+      feedbackSubtitle: "为每个已扫描电机提供独立选项卡，点击后查看当前电机的完整信息。",
+      motorTabsTitle: "电机列表",
+      motorDetailTitle: "电机详情",
+      statusIdle: "等待调试操作",
+      actionRunning: "正在执行 {{action}}...",
+      actionDone: "{{action}} 已完成",
+      serviceCard: "后台服务",
+      connectionCard: "连接状态",
+      serialCard: "串口接口",
+      feedbackCard: "电机反馈",
+      enabledCard: "驱动使能",
+      zeroCard: "零点",
+      backendOnline: "在线",
+      backendOffline: "离线",
+      armConnected: "已连接",
+      armDisconnected: "未连接",
+      serialReady: "已检测",
+      serialMissing: "未检测",
+      feedbackReady: "{{count}} 路反馈",
+      feedbackMissing: "无反馈",
+      enabled: "已使能",
+      disabled: "未使能",
+      zeroCalibrated: "已重写",
+      zeroPending: "未重写",
+      zeroLastSet: "最后校准",
+      permissionRequired: "需要串口权限",
+      channel: "通道",
+      lastScan: "最近扫描",
+      calibrateConfirm: "当前姿态将被写入为机械臂 0 点，机械臂会短暂失能并重新使能。是否继续？",
+      noMotors: "暂无电机反馈，请先点击“刷新并扫描”或“读取反馈”。",
+      noMotorSelected: "请先选择一个电机选项卡。",
+      clientLogs: "前端日志",
+      backendLogs: "后端日志",
+      noBackendLogs: "暂无后台日志",
+      name: "名称",
+      model: "型号",
+      code: "状态码",
+      position: "位置",
+      velocity: "速度",
+      torque: "扭矩",
+      motorId: "电机 ID",
+      feedbackId: "反馈 ID",
     },
     modal: {
       detectedTitle: "检测到真实机械臂",
@@ -192,7 +275,7 @@ const translations = {
       armViewport: "Robot arm 3D URDF simulator",
     },
     language: { zhCN: "Chinese", enUS: "English" },
-    nav: { control: "Control", motion: "Motion", apps: "Apps", diagnostics: "Diagnostics" },
+    nav: { control: "Control", apps: "Apps", diagnostics: "Diagnostics" },
     service: {
       label: "Backend Service",
       sameOrigin: "same-origin REST API",
@@ -205,8 +288,6 @@ const translations = {
     view: {
       controlEyebrow: "rebot arm webui",
       controlTitle: "Live Control",
-      motionEyebrow: "Motion Planning",
-      motionTitle: "Motion Planning",
       appsEyebrow: "App Center",
       appsTitle: "App Center",
       diagnosticsEyebrow: "Diagnostics",
@@ -218,6 +299,10 @@ const translations = {
       connectArm: "Connect Arm",
       refreshStatus: "Refresh Status",
       disconnectArm: "Disconnect",
+      refreshScan: "Refresh & Scan",
+      fetchFeedback: "Fetch Feedback",
+      enableDrive: "Enable Arm",
+      disableDrive: "Disable Arm",
       solveIk: "Solve IK",
       home: "Home",
       readRealPose: "Read Real Pose",
@@ -229,6 +314,7 @@ const translations = {
       gotIt: "Got It",
       configureSerial: "Grant Serial Access",
       configuring: "Granting...",
+      calibrateZero: "Calibrate Zero",
     },
     panel: {
       armPoseTitle: "Robot Pose",
@@ -242,9 +328,82 @@ const translations = {
     camera: { side: "Side", top: "Top" },
     maintenance: {
       title: "Page Under Maintenance",
-      motion: "Motion planning is under active development.",
       apps: "App Center is under active development.",
       diagnostics: "Diagnostics is temporarily unavailable while this page is under maintenance.",
+    },
+    appCenter: {
+      title: "Robot Arm Projects",
+      subtitle: "A curated set of Seeed reBot Arm projects. Click any card to open its project page.",
+      openProject: "Open Project",
+      graspnet: {
+        tag: "Visual Grasping",
+        title: "GraspNet Visual Grasping",
+        desc: "A GraspNet-based visual grasping workflow for quickly validating perception, grasping, and arm coordination.",
+      },
+      voice: {
+        tag: "Voice Control",
+        title: "Voice Control reBot Arm",
+        desc: "Control the robot arm with voice commands to demonstrate natural interaction and execution flow integration.",
+      },
+      openclaw: {
+        tag: "Edge Agent",
+        title: "NemoClaw on Jetson Thor",
+        desc: "Combine NVIDIA Jetson Thor with NemoClaw for a stronger on-device robot arm control experience.",
+      },
+      lerobot: {
+        tag: "Embodied Learning",
+        title: "LeRobot for reBot Arm",
+        desc: "Focus on LeRobot training and deployment workflows for data collection, learning, and reproduction on the arm.",
+      },
+    },
+    diagnostics: {
+      subtitle: "Click-to-debug tools, live status, and backend events",
+      summaryTitle: "Status Summary",
+      actionsTitle: "Click Debug",
+      actionNote: "Aligned with the MotorBridge enable and status workflow for fast checks of serial access, feedback, and drive enable.",
+      feedbackTitle: "Motor Debug",
+      feedbackSubtitle: "Each scanned motor gets its own tab so you can inspect the full live payload.",
+      motorTabsTitle: "Motor Tabs",
+      motorDetailTitle: "Motor Details",
+      statusIdle: "Waiting for a debug action",
+      actionRunning: "Running {{action}}...",
+      actionDone: "{{action}} completed",
+      serviceCard: "Backend",
+      connectionCard: "Connection",
+      serialCard: "Serial",
+      feedbackCard: "Feedback",
+      enabledCard: "Drive Enable",
+      zeroCard: "Zero Point",
+      backendOnline: "Online",
+      backendOffline: "Offline",
+      armConnected: "Connected",
+      armDisconnected: "Disconnected",
+      serialReady: "Detected",
+      serialMissing: "Missing",
+      feedbackReady: "{{count}} motors",
+      feedbackMissing: "No feedback",
+      enabled: "Enabled",
+      disabled: "Disabled",
+      zeroCalibrated: "Rewritten",
+      zeroPending: "Not Set",
+      zeroLastSet: "Last Calibration",
+      permissionRequired: "Serial permission required",
+      channel: "Channel",
+      lastScan: "Last Scan",
+      calibrateConfirm: "The current pose will be written as the arm zero point. The arm will be briefly disabled and then re-enabled. Continue?",
+      noMotors: "No motor feedback yet. Try Refresh & Scan or Fetch Feedback.",
+      noMotorSelected: "Select a motor tab first.",
+      clientLogs: "Client Logs",
+      backendLogs: "Backend Logs",
+      noBackendLogs: "No backend logs yet",
+      name: "Name",
+      model: "Model",
+      code: "Status",
+      position: "Position",
+      velocity: "Velocity",
+      torque: "Torque",
+      motorId: "Motor ID",
+      feedbackId: "Feedback ID",
     },
     modal: {
       detectedTitle: "Real Arm Detected",
@@ -366,8 +525,16 @@ const els = {
   connectionStatus: document.querySelector("#connectionStatus"),
   sidebarModeBadge: document.querySelector("#sidebarModeBadge"),
   jointList: document.querySelector("#jointList"),
-  logList: document.querySelector("#logList"),
   backendLogList: document.querySelector("#backendLogList"),
+  diagnosticsStatus: document.querySelector("#diagnosticsStatus"),
+  diagnosticsSummary: document.querySelector("#diagnosticsSummary"),
+  diagnosticsMotorTabs: document.querySelector("#diagnosticsMotorTabs"),
+  diagnosticsMotorDetail: document.querySelector("#diagnosticsMotorDetail"),
+  refreshScanButton: document.querySelector("#refreshScanButton"),
+  fetchFeedbackButton: document.querySelector("#fetchFeedbackButton"),
+  enableDriveButton: document.querySelector("#enableDriveButton"),
+  disableDriveButton: document.querySelector("#disableDriveButton"),
+  calibrateZeroButton: document.querySelector("#calibrateZeroButton"),
   serviceState: document.querySelector("#serviceState"),
   serviceEndpoint: document.querySelector("#serviceEndpoint"),
   urdfPathText: document.querySelector("#urdfPathText"),
@@ -444,7 +611,6 @@ function setSidebarModeBadge() {
 
 const viewMeta = {
   control: { eyebrowKey: "view.controlEyebrow", titleKey: "view.controlTitle" },
-  motion: { eyebrowKey: "view.motionEyebrow", titleKey: "view.motionTitle" },
   apps: { eyebrowKey: "view.appsEyebrow", titleKey: "view.appsTitle" },
   diagnostics: { eyebrowKey: "view.diagnosticsEyebrow", titleKey: "view.diagnosticsTitle" },
 };
@@ -473,7 +639,7 @@ function animateLanguageSwitch() {
 
 function updateViewHeader() {
   const meta = viewMeta[state.activeView] ?? viewMeta.control;
-  els.pageEyebrow.textContent = t(meta.eyebrowKey);
+  els.pageEyebrow.textContent = "REBOT ARM WEBUI";
   els.pageTitle.textContent = t(meta.titleKey);
 }
 
@@ -722,6 +888,7 @@ async function loadSimConfig() {
 }
 
 function addLog(message) {
+  if (!els.logList) return;
   const item = document.createElement("div");
   item.className = "log-item";
   item.innerHTML = `<strong>${message}</strong><time>${new Date().toLocaleTimeString("zh-CN", { hour12: false })}</time>`;
@@ -732,10 +899,32 @@ function addLog(message) {
   }
 }
 
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function formatClock(value) {
+  if (!value) return "--";
+  if (typeof value === "number") {
+    return new Date(value * 1000).toLocaleTimeString(state.locale, { hour12: false });
+  }
+  return String(value);
+}
+
+function formatMetric(value, digits = 3, suffix = "") {
+  if (typeof value !== "number" || Number.isNaN(value)) return "--";
+  return `${value.toFixed(digits)}${suffix}`;
+}
+
 function renderBackendLogs(events = []) {
   if (!els.backendLogList) return;
   if (!events.length) {
-    els.backendLogList.innerHTML = `<div class="log-item"><strong>暂无后台日志</strong><time>--</time></div>`;
+    els.backendLogList.innerHTML = `<div class="log-item"><strong>${t("diagnostics.noBackendLogs")}</strong><time>--</time></div>`;
     return;
   }
   els.backendLogList.innerHTML = events
@@ -762,6 +951,173 @@ async function refreshBackendLogs() {
   } catch {
     renderBackendLogs([]);
   }
+}
+
+function getDiagnosticsMotors() {
+  const motors = Array.isArray(state.detectedMotors) ? [...state.detectedMotors] : [];
+  const seenFeedbackIds = new Set(
+    motors
+      .map((motor) => Number(motor?.feedback_id))
+      .filter((feedbackId) => Number.isFinite(feedbackId))
+  );
+  const gripperState = state.lastHealth?.gripper_state;
+  const gripperFeedbackId = Number(state.lastHealth?.gripper_feedback_id);
+  if (gripperState && (!Number.isFinite(gripperFeedbackId) || !seenFeedbackIds.has(gripperFeedbackId))) {
+    motors.push({
+      name: String(state.lastHealth?.gripper_name || "gripper"),
+      model: state.lastHealth?.gripper_model || "--",
+      motor_id: state.lastHealth?.gripper_motor_id,
+      feedback_id: state.lastHealth?.gripper_feedback_id,
+      status_code: gripperState.status_code,
+      pos: gripperState.pos,
+      vel: gripperState.vel,
+      torq: gripperState.torq,
+      vendor: state.lastHealth?.gripper_vendor,
+      linked_joint: state.lastHealth?.gripper_motor_id ? `joint${Number(state.lastHealth.gripper_motor_id)}` : "",
+      role: "gripper",
+    });
+  }
+  return motors;
+}
+
+function renderDiagnostics() {
+  if (els.diagnosticsStatus) {
+    const busyLabel = state.diagnosticsBusyAction
+      ? t("diagnostics.actionRunning", { action: state.diagnosticsBusyLabel || state.diagnosticsBusyAction })
+      : resolveText(state.diagnosticsStatusMessage);
+    els.diagnosticsStatus.textContent = busyLabel;
+    els.diagnosticsStatus.classList.toggle("warn", Boolean(state.permissionRequired || state.lastHealth?.error));
+  }
+
+  if (els.diagnosticsSummary) {
+    const cards = [
+      {
+        tone: state.backendOnline ? "success" : "inactive",
+        label: t("diagnostics.serviceCard"),
+        value: state.backendOnline ? t("diagnostics.backendOnline") : t("diagnostics.backendOffline"),
+        meta: state.permissionRequired ? t("diagnostics.permissionRequired") : window.location.origin,
+      },
+      {
+        tone: state.connected ? "success" : "inactive",
+        label: t("diagnostics.connectionCard"),
+        value: state.connected ? t("diagnostics.armConnected") : t("diagnostics.armDisconnected"),
+        meta: t("diagnostics.enabledCard") + " · " + (state.enabled ? t("diagnostics.enabled") : t("diagnostics.disabled")),
+      },
+      {
+        tone: state.interfacePresent ? "info" : "inactive",
+        label: t("diagnostics.serialCard"),
+        value: state.interfacePresent ? t("diagnostics.serialReady") : t("diagnostics.serialMissing"),
+        meta: `${t("diagnostics.channel")}: ${state.lastHealth?.channel ?? "--"}`,
+      },
+      {
+        tone: state.detectedMotors.length ? "success" : state.interfacePresent ? "warning" : "inactive",
+        label: t("diagnostics.feedbackCard"),
+        value: state.detectedMotors.length ? t("diagnostics.feedbackReady", { count: state.detectedMotors.length }) : t("diagnostics.feedbackMissing"),
+        meta: `${t("diagnostics.lastScan")}: ${formatClock(state.lastHealth?.last_scan_at)}`,
+      },
+      {
+        tone: state.lastHealth?.zero_calibrated ? "success" : "info",
+        label: t("diagnostics.zeroCard"),
+        value: state.lastHealth?.zero_calibrated ? t("diagnostics.zeroCalibrated") : t("diagnostics.zeroPending"),
+        meta: `${t("diagnostics.zeroLastSet")}: ${formatClock(state.lastHealth?.zero_last_set_at)}`,
+      },
+    ];
+
+    els.diagnosticsSummary.innerHTML = cards.map((card) => `
+      <article class="diagnostics-card diagnostics-card-${card.tone}">
+        <span class="diagnostics-card-label">${escapeHtml(card.label)}</span>
+        <strong>${escapeHtml(card.value)}</strong>
+        <span class="diagnostics-card-meta">${escapeHtml(card.meta)}</span>
+      </article>
+    `).join("");
+  }
+
+  const diagnosticsMotors = getDiagnosticsMotors();
+  const motorNames = diagnosticsMotors.map((motor) => String(motor.name ?? ""));
+  if (!motorNames.includes(state.selectedMotorName)) {
+    state.selectedMotorName = motorNames[0] ?? "";
+  }
+
+  if (els.diagnosticsMotorTabs) {
+    if (!diagnosticsMotors.length) {
+      els.diagnosticsMotorTabs.innerHTML = `<div class="diagnostics-empty">${escapeHtml(t("diagnostics.noMotors"))}</div>`;
+    } else {
+      els.diagnosticsMotorTabs.innerHTML = diagnosticsMotors.map((motor) => {
+        const name = String(motor.name ?? "motor");
+        const active = name === state.selectedMotorName;
+        const subtitle = motor.role === "gripper"
+          ? (motor.linked_joint ? `${motor.model ?? "--"} · ${motor.linked_joint}` : String(motor.model ?? "--"))
+          : (motor.alias ? `${motor.model ?? "--"} · ${motor.alias}` : String(motor.model ?? "--"));
+        return `
+          <button class="motor-tab${active ? " active" : ""}" type="button" data-motor-tab="${escapeHtml(name)}">
+            <strong>${escapeHtml(name)}</strong>
+            <span>${escapeHtml(subtitle)}</span>
+          </button>
+        `;
+      }).join("");
+    }
+  }
+
+  if (els.diagnosticsMotorDetail) {
+    const currentMotor = diagnosticsMotors.find((motor) => String(motor.name ?? "") === state.selectedMotorName);
+    if (!currentMotor) {
+      els.diagnosticsMotorDetail.innerHTML = `<div class="diagnostics-empty">${escapeHtml(t("diagnostics.noMotorSelected"))}</div>`;
+    } else {
+      const detailEntries = [
+        [t("diagnostics.name"), currentMotor.name],
+        [t("diagnostics.model"), currentMotor.model],
+        [t("diagnostics.motorId"), `0x${Number(currentMotor.motor_id ?? 0).toString(16).padStart(2, "0")}`],
+        [t("diagnostics.feedbackId"), `0x${Number(currentMotor.feedback_id ?? 0).toString(16).padStart(2, "0")}`],
+        [t("diagnostics.code"), currentMotor.status_code],
+        [t("diagnostics.position"), formatMetric(Number(currentMotor.pos), 6, " rad")],
+        [t("diagnostics.velocity"), formatMetric(Number(currentMotor.vel), 6, " rad/s")],
+        [t("diagnostics.torque"), formatMetric(Number(currentMotor.torq), 6, " Nm")],
+      ];
+      Object.entries(currentMotor).forEach(([key, value]) => {
+        const knownKeys = new Set(["name", "model", "motor_id", "feedback_id", "status_code", "pos", "vel", "torq"]);
+        if (knownKeys.has(key)) return;
+        detailEntries.push([key, typeof value === "object" ? JSON.stringify(value) : value]);
+      });
+      els.diagnosticsMotorDetail.innerHTML = `
+        <div class="motor-detail-card">
+          <div class="motor-detail-head">
+            <strong>${escapeHtml(String(currentMotor.name ?? "motor"))}</strong>
+            <span class="badge ${Number(currentMotor.status_code ?? 0) > 0 ? "badge-success" : "badge-inactive"}">${escapeHtml(t("diagnostics.code"))}: ${escapeHtml(currentMotor.status_code ?? "--")}</span>
+          </div>
+          <dl class="motor-detail-grid">
+            ${detailEntries.map(([label, value]) => `
+              <div>
+                <dt>${escapeHtml(label)}</dt>
+                <dd>${escapeHtml(value ?? "--")}</dd>
+              </div>
+            `).join("")}
+          </dl>
+        </div>
+      `;
+    }
+  }
+
+  const actionButtons = [
+    ["refreshScan", els.refreshScanButton, "button.refreshScan"],
+    ["feedback", els.fetchFeedbackButton, "button.fetchFeedback"],
+    ["enable", els.enableDriveButton, "button.enableDrive"],
+    ["disable", els.disableDriveButton, "button.disableDrive"],
+    ["calibrate", els.calibrateZeroButton, "button.calibrateZero"],
+  ];
+  actionButtons.forEach(([action, button, labelKey]) => {
+    if (!button) return;
+    const unavailable = !state.backendOnline && action !== "refreshScan";
+    const redundantEnable = action === "enable" && state.enabled;
+    const redundantDisable = action === "disable" && !state.enabled;
+    const requiresConnection = action === "calibrate" && !state.connected;
+    button.disabled = Boolean(state.diagnosticsBusyAction) || unavailable || redundantEnable || redundantDisable || requiresConnection;
+    button.dataset.action = action;
+    button.classList.toggle("is-busy", state.diagnosticsBusyAction === action);
+    if (!button.dataset.ready) {
+      button.dataset.ready = "true";
+    }
+    button.querySelector("span")?.replaceChildren(document.createTextNode(t(labelKey)));
+  });
 }
 
 function setOverlay(message, persistent = false) {
@@ -964,9 +1320,6 @@ function syncJointInputs() {
   });
 }
 
-function renderDiagnostics() {
-}
-
 function updateConnectionUi() {
   els.serviceState.textContent = state.backendOnline
     ? state.connected ? t("service.realConnected") : state.interfacePresent ? t("service.commDetected") : t("service.backendOnline")
@@ -997,6 +1350,7 @@ function updateConnectionUi() {
   setButtonContent(document.querySelector("#sendTargetButton"), "mingcute:send-plane-line", t("button.sendTarget"));
   setButtonContent(els.gripperOpenButton, "mingcute:open-door-line", t("button.gripperOpen"));
   setButtonContent(els.gripperCloseButton, "mingcute:lock-line", t("button.gripperClose"));
+  renderDiagnostics();
 }
 
 function applyArmDetection(payload) {
@@ -1017,6 +1371,25 @@ function applyArmDetection(payload) {
     state.armPromptDismissed = false;
   }
 
+}
+
+function applyRealtimePayload(payload, { robotState = false } = {}) {
+  if (!payload) return;
+  state.lastHealth = payload;
+  if (robotState) state.lastRobotState = payload;
+  if (!robotState && !payload.connected) state.lastRobotState = null;
+  applyArmDetection(payload);
+  applyBackendStatus(true);
+  state.connected = Boolean(payload.connected);
+  state.enabled = "enabled" in payload ? Boolean(payload.enabled) : state.connected;
+  if (Array.isArray(payload.joints_rad)) {
+    setJointRadians(payload.joints_rad);
+  }
+  if (payload.end_effector?.position_m) {
+    state.lastPose = payload.end_effector;
+    writeCartesianInputs(payload.end_effector);
+    writePoseSummary(payload.end_effector);
+  }
 }
 
 function showArmDetectModal(mode = state.armModalMode) {
@@ -1127,7 +1500,12 @@ function setActiveView(viewName) {
     startAnimation();
   } else {
     stopAnimation();
-    if (state.activeView === "diagnostics") refreshBackendLogs();
+    if (state.activeView === "diagnostics") {
+      renderDiagnostics();
+      refreshBackendLogs();
+      refreshBackendHealth({ showPrompt: false });
+      if (state.connected) refreshRobotState();
+    }
   }
 }
 
@@ -1334,10 +1712,7 @@ function updateDerivedState() {
 async function refreshBackendHealth({ showPrompt = false } = {}) {
   try {
     const health = await apiJson("/healthz", { timeoutMs: 1800 });
-    applyArmDetection(health);
-    applyBackendStatus(true);
-    state.connected = Boolean(health.connected);
-    state.enabled = state.connected;
+    applyRealtimePayload(health);
     updateConnectionUi();
     if (showPrompt || (!state.connected && state.interfacePresent && !state.armPromptDismissed)) {
       showArmDetectModal("connect");
@@ -1350,6 +1725,8 @@ async function refreshBackendHealth({ showPrompt = false } = {}) {
     state.detectedMotors = [];
     state.permissionRequired = false;
     state.permissionHint = "";
+    state.lastHealth = null;
+    state.lastRobotState = null;
     hideArmDetectModal();
     updateConnectionUi();
     return null;
@@ -1359,18 +1736,7 @@ async function refreshBackendHealth({ showPrompt = false } = {}) {
 async function refreshRobotState() {
   try {
     const robotState = await apiJson("/state", { timeoutMs: 2500 });
-    applyArmDetection(robotState);
-    applyBackendStatus(true);
-    state.connected = Boolean(robotState.connected);
-    state.enabled = state.connected;
-    if (Array.isArray(robotState.joints_rad)) {
-      setJointRadians(robotState.joints_rad);
-    }
-    if (robotState.end_effector?.position_m) {
-      state.lastPose = robotState.end_effector;
-      writeCartesianInputs(robotState.end_effector);
-      writePoseSummary(robotState.end_effector);
-    }
+    applyRealtimePayload(robotState, { robotState: true });
     updateConnectionUi();
     return robotState;
   } catch (error) {
@@ -1397,6 +1763,76 @@ async function readRealArmPose() {
   } finally {
     delete els.readRealPoseButton.dataset.loading;
     updateConnectionUi();
+  }
+}
+
+async function runDiagnosticsAction(action) {
+  if (action === "calibrate" && !window.confirm(t("diagnostics.calibrateConfirm"))) {
+    return;
+  }
+  const labelMap = {
+    refreshScan: t("button.refreshScan"),
+    feedback: t("button.fetchFeedback"),
+    enable: t("button.enableDrive"),
+    disable: t("button.disableDrive"),
+    calibrate: t("button.calibrateZero"),
+  };
+  const actionLabel = labelMap[action] ?? action;
+  state.diagnosticsBusyAction = action;
+  state.diagnosticsBusyLabel = actionLabel;
+  state.diagnosticsStatusMessage = { key: "diagnostics.actionRunning", vars: { action: actionLabel } };
+  renderDiagnostics();
+
+  try {
+    if (action === "refreshScan") {
+      const health = await refreshBackendHealth({ showPrompt: false });
+      if (!health) {
+        throw new Error(state.locale === "en-US" ? "Backend unavailable" : "后端服务不可用");
+      }
+      const result = await apiJson("/debug/arm", {
+        method: "POST",
+        body: { action: "scan" },
+        timeoutMs: 10000,
+      });
+      applyRealtimePayload(result, { robotState: Array.isArray(result.joints_rad) });
+      if (result.connected) {
+        await refreshRobotState();
+      }
+      await refreshBackendLogs();
+      const message = result.message || t("diagnostics.actionDone", { action: actionLabel });
+      state.diagnosticsStatusMessage = message;
+      addLog(state.locale === "en-US" ? `${actionLabel} complete` : `${actionLabel}完成`);
+      return;
+    }
+
+    const result = await apiJson("/debug/arm", {
+      method: "POST",
+      body: { action },
+      timeoutMs: 10000,
+    });
+    applyRealtimePayload(result, { robotState: Array.isArray(result.joints_rad) });
+    updateConnectionUi();
+    await refreshBackendLogs();
+
+    const message = result.message || t("diagnostics.actionDone", { action: actionLabel });
+    state.diagnosticsStatusMessage = message;
+    addLog(message);
+  } catch (error) {
+    let message = state.locale === "en-US" ? `Debug action failed: ${actionLabel}` : `调试操作失败: ${actionLabel}`;
+    if (error instanceof Error && error.message) {
+      try {
+        const payload = JSON.parse(error.message);
+        message = payload.message || payload.detail || message;
+      } catch {
+        message = error.message || message;
+      }
+    }
+    state.diagnosticsStatusMessage = message;
+    addLog(message);
+  } finally {
+    state.diagnosticsBusyAction = "";
+    state.diagnosticsBusyLabel = "";
+    renderDiagnostics();
   }
 }
 
@@ -1431,7 +1867,7 @@ async function handleConnectButton() {
 async function connectRobot({ confirmed = false } = {}) {
   try {
     const result = await apiJson("/connect", { method: "POST", body: { confirm: confirmed }, timeoutMs: 8000 });
-    applyArmDetection(result);
+    applyRealtimePayload(result);
     if (result.requires_confirmation) {
       state.armPromptDismissed = false;
       state.armModalMode = "connect";
@@ -1459,8 +1895,6 @@ async function connectRobot({ confirmed = false } = {}) {
     state.armPromptDismissed = false;
     addLog("真实机械臂连接成功");
     setSolverStatus({ key: "solver.connectSuccess" });
-    state.connected = true;
-    state.enabled = true;
     updateConnectionUi();
     await refreshBackendLogs();
   } catch (error) {
@@ -1473,15 +1907,14 @@ async function connectRobot({ confirmed = false } = {}) {
 async function disconnectRobot() {
   try {
     const result = await apiJson("/disconnect", { method: "POST", body: {} });
-    applyArmDetection(result);
-    state.connected = false;
-    state.enabled = false;
+    applyRealtimePayload(result);
     state.armPromptDismissed = false;
     hideArmDetectModal();
     addLog("真实机械臂已断开");
   } catch {
     state.connected = false;
     state.enabled = false;
+    state.lastHealth = null;
     addLog("断开机械臂失败");
   }
   updateConnectionUi();
@@ -1640,6 +2073,17 @@ function bindControls() {
   });
   els.gripperOpenButton.addEventListener("click", () => sendGripper("open"));
   els.gripperCloseButton.addEventListener("click", () => sendGripper("close"));
+  els.refreshScanButton?.addEventListener("click", () => runDiagnosticsAction("refreshScan"));
+  els.fetchFeedbackButton?.addEventListener("click", () => runDiagnosticsAction("feedback"));
+  els.enableDriveButton?.addEventListener("click", () => runDiagnosticsAction("enable"));
+  els.disableDriveButton?.addEventListener("click", () => runDiagnosticsAction("disable"));
+  els.calibrateZeroButton?.addEventListener("click", () => runDiagnosticsAction("calibrate"));
+  els.diagnosticsMotorTabs?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-motor-tab]");
+    if (!button) return;
+    state.selectedMotorName = button.getAttribute("data-motor-tab") || "";
+    renderDiagnostics();
+  });
 
   window.addEventListener("resize", resizeRenderer);
 }
@@ -1704,6 +2148,7 @@ async function init() {
   await loadSimConfig();
   updateConnectionUi();
   updateDerivedState();
+  renderDiagnostics();
   solveFkRealtime("init");
   loadRobotModel();
   startAnimation();

@@ -17,8 +17,14 @@
     <div class="app-shell">
       <aside class="sidebar" data-i18n-aria-label="aria.mainNav" aria-label="主导航">
         <div class="brand">
+          <div class="brand-logo">
+            <img
+              src="https://media-cdn.seeedstudio.com/media/logo/stores/4/logo_2018_horizontal.png"
+              alt="Seeed Studio"
+              loading="lazy"
+            />
+          </div>
           <div class="brand-text">
-            <strong data-i18n="brand.title">rebot arm webui</strong>
             <span data-i18n="brand.subtitle">DevArm Console</span>
           </div>
         </div>
@@ -26,9 +32,6 @@
         <nav class="nav-list">
           <button class="nav-item active" type="button" data-view="control">
             <span data-i18n="nav.control">控制台</span>
-          </button>
-          <button class="nav-item" type="button" data-view="motion">
-            <span data-i18n="nav.motion">运动规划</span>
           </button>
           <button class="nav-item" type="button" data-view="apps">
             <span data-i18n="nav.apps">应用中心</span>
@@ -42,7 +45,7 @@
       <main class="workspace">
         <header class="topbar">
           <div class="topbar-left">
-            <p class="eyebrow" id="pageEyebrow">rebot arm webui</p>
+            <p class="eyebrow" id="pageEyebrow">REBOT ARM WEBUI</p>
             <h1 id="pageTitle">实时控制台</h1>
           </div>
 
@@ -173,38 +176,146 @@
           </div>
         </section>
 
-        <section class="view planning-view" id="motionView">
-          <div class="panel maintenance-panel">
-            <h2 data-i18n="maintenance.title">页面正在维护</h2>
-            <p data-i18n="maintenance.motion">运动规划功能后续开发。</p>
-          </div>
-        </section>
-
         <section class="view app-center-view" id="appsView">
-          <div class="panel maintenance-panel">
-            <h2 data-i18n="maintenance.title">页面正在维护</h2>
-            <p data-i18n="maintenance.apps">应用中心功能后续开发。</p>
+          <div class="panel app-center-panel">
+            <div class="panel-head">
+              <div>
+                <h2 data-i18n="appCenter.title">机械臂项目</h2>
+                <p data-i18n="appCenter.subtitle">精选 Seeed reBot Arm 项目，点击卡片可直接跳转到对应页面。</p>
+              </div>
+            </div>
+
+            <div class="app-center-grid">
+              <a class="app-card app-card-graspnet" href="https://wiki.seeedstudio.com/rebot_arm_b601_dm_graspnet_visual_grasping/" target="_blank" rel="noreferrer">
+                <div class="app-card-media">
+                  <img src="https://files.seeedstudio.com/wiki/graspnet/front-graspnet.png" alt="GraspNet Visual Grasping" loading="lazy" />
+                </div>
+                <div class="app-card-body">
+                  <div class="app-card-top">
+                    <span class="app-card-tag" data-i18n="appCenter.graspnet.tag">视觉抓取</span>
+                    <iconify-icon icon="mingcute:external-link-line" aria-hidden="true"></iconify-icon>
+                  </div>
+                  <strong data-i18n="appCenter.graspnet.title">GraspNet Visual Grasping</strong>
+                  <p data-i18n="appCenter.graspnet.desc">基于 GraspNet 的视觉抓取方案，适合快速验证识别、抓取与机械臂联动流程。</p>
+                  <span class="app-card-link"><span data-i18n="appCenter.openProject">查看项目</span></span>
+                </div>
+              </a>
+
+              <a class="app-card app-card-voice" href="https://wiki.seeedstudio.com/voice_control_rebot_arm/" target="_blank" rel="noreferrer">
+                <div class="app-card-media">
+                  <img src="https://files.seeedstudio.com/wiki/reComputer-Jetson/voice_controlled_rebot_arm/cover_page.png" alt="Voice Control reBot Arm" loading="lazy" />
+                </div>
+                <div class="app-card-body">
+                  <div class="app-card-top">
+                    <span class="app-card-tag" data-i18n="appCenter.voice.tag">语音控制</span>
+                    <iconify-icon icon="mingcute:external-link-line" aria-hidden="true"></iconify-icon>
+                  </div>
+                  <strong data-i18n="appCenter.voice.title">Voice Control reBot Arm</strong>
+                  <p data-i18n="appCenter.voice.desc">通过语音指令驱动机械臂动作，适合展示自然交互与执行链路整合能力。</p>
+                  <span class="app-card-link"><span data-i18n="appCenter.openProject">查看项目</span></span>
+                </div>
+              </a>
+
+              <a class="app-card app-card-openclaw" href="https://wiki.seeedstudio.com/control_rebot_arm_with_nemoclaw_on_nvidia_jetson_thor/" target="_blank" rel="noreferrer">
+                <div class="app-card-media">
+                  <img src="https://media-cdn.seeedstudio.com/media/catalog/product/cache/bb49d3ec4ee05b6f018e93f896b8a25d/i/m/img_v3_0210p_67d75fe6-a1fe-40a9-b025-ac92efb1bbbg_1.jpg" alt="NemoClaw on Jetson Thor" loading="lazy" />
+                </div>
+                <div class="app-card-body">
+                  <div class="app-card-top">
+                    <span class="app-card-tag" data-i18n="appCenter.openclaw.tag">端侧智能体</span>
+                    <iconify-icon icon="mingcute:external-link-line" aria-hidden="true"></iconify-icon>
+                  </div>
+                  <strong data-i18n="appCenter.openclaw.title">NemoClaw on Jetson Thor</strong>
+                  <p data-i18n="appCenter.openclaw.desc">结合 NVIDIA Jetson Thor 与 NemoClaw，构建更强的端侧机械臂控制体验。</p>
+                  <span class="app-card-link"><span data-i18n="appCenter.openProject">查看项目</span></span>
+                </div>
+              </a>
+
+              <a class="app-card app-card-lerobot" href="https://wiki.seeedstudio.com/rebot_arm_b601_dm_lerobot/" target="_blank" rel="noreferrer">
+                <div class="app-card-media">
+                  <img src="https://files.seeedstudio.com/wiki/robotics/projects/rebot_arm/dm_pinocchio_mashcat/v2.0.png" alt="LeRobot for reBot Arm" loading="lazy" />
+                </div>
+                <div class="app-card-body">
+                  <div class="app-card-top">
+                    <span class="app-card-tag" data-i18n="appCenter.lerobot.tag">具身学习</span>
+                    <iconify-icon icon="mingcute:external-link-line" aria-hidden="true"></iconify-icon>
+                  </div>
+                  <strong data-i18n="appCenter.lerobot.title">LeRobot for reBot Arm</strong>
+                  <p data-i18n="appCenter.lerobot.desc">围绕 LeRobot 训练与部署流程，展示机械臂数据采集、学习和复现能力。</p>
+                  <span class="app-card-link"><span data-i18n="appCenter.openProject">查看项目</span></span>
+                </div>
+              </a>
+            </div>
           </div>
         </section>
 
         <section class="view diagnostics-view" id="diagnosticsView">
-          <div class="panel diagnostics-log-panel">
-            <div class="panel-head">
-              <div>
-                <h2 data-i18n="nav.diagnostics">诊断</h2>
-                <p>Telemetry, command history, backend events</p>
+          <div class="diagnostics-layout">
+            <div class="panel diagnostics-workbench">
+              <div class="panel-head">
+                <div>
+                  <h2 data-i18n="nav.diagnostics">诊断</h2>
+                  <p data-i18n="diagnostics.subtitle">点击调试、实时状态与后端事件</p>
+                </div>
+                <div class="solver-status diagnostics-status-chip" id="diagnosticsStatus" data-i18n="diagnostics.statusIdle">等待调试操作</div>
               </div>
+
+              <section class="diagnostics-section">
+                <h3 class="control-subhead" data-i18n="diagnostics.summaryTitle">状态摘要</h3>
+                <div class="diagnostics-summary-grid" id="diagnosticsSummary"></div>
+              </section>
+
+              <section class="diagnostics-section">
+                <div class="panel-head compact">
+                  <div>
+                    <h3 class="control-subhead" data-i18n="diagnostics.actionsTitle">点击调试</h3>
+                    <p class="panel-note" data-i18n="diagnostics.actionNote">参考 MotorBridge 的使能与状态读取流程，适合快速验证串口、反馈和使能状态。</p>
+                  </div>
+                </div>
+                <div class="diagnostics-action-grid">
+                  <button class="btn btn-default diagnostics-action-button" id="refreshScanButton" type="button">
+                    <iconify-icon icon="mingcute:refresh-2-line" aria-hidden="true"></iconify-icon><span data-i18n="button.refreshScan">刷新并扫描</span>
+                  </button>
+                  <button class="btn btn-default diagnostics-action-button" id="fetchFeedbackButton" type="button">
+                    <iconify-icon icon="mingcute:pulse-line" aria-hidden="true"></iconify-icon><span data-i18n="button.fetchFeedback">读取反馈</span>
+                  </button>
+                  <button class="btn btn-primary diagnostics-action-button" id="enableDriveButton" type="button">
+                    <iconify-icon icon="mingcute:power-line" aria-hidden="true"></iconify-icon><span data-i18n="button.enableDrive">使能机械臂</span>
+                  </button>
+                  <button class="btn btn-default diagnostics-action-button" id="disableDriveButton" type="button">
+                    <iconify-icon icon="mingcute:power-off-line" aria-hidden="true"></iconify-icon><span data-i18n="button.disableDrive">失能机械臂</span>
+                  </button>
+                  <button class="btn btn-default diagnostics-action-button" id="calibrateZeroButton" type="button">
+                    <iconify-icon icon="mingcute:target-line" aria-hidden="true"></iconify-icon><span data-i18n="button.calibrateZero">机械臂校准</span>
+                  </button>
+                </div>
+              </section>
+
+              <section class="diagnostics-section">
+                <div class="panel-head compact">
+                  <div>
+                    <h3 class="control-subhead" data-i18n="diagnostics.feedbackTitle">电机调试</h3>
+                    <p class="panel-note" data-i18n="diagnostics.feedbackSubtitle">为每个已扫描电机提供独立选项卡，点击后查看当前电机的完整信息。</p>
+                  </div>
+                </div>
+                <div class="diagnostics-motor-explorer">
+                  <div class="diagnostics-motor-tabs" id="diagnosticsMotorTabs"></div>
+                  <div class="diagnostics-motor-detail" id="diagnosticsMotorDetail"></div>
+                </div>
+              </section>
             </div>
 
-            <div class="diagnostics-logs">
-              <section>
-                <h3 class="control-subhead">Client Logs</h3>
-                <div class="log-list" id="logList"></div>
-              </section>
-              <section>
-                <h3 class="control-subhead">Backend Logs</h3>
-                <div class="log-list" id="backendLogList"></div>
-              </section>
+            <div class="panel diagnostics-log-panel">
+              <div class="panel-head">
+                <div>
+                  <h2 data-i18n="diagnostics.backendLogs">后端日志</h2>
+                  <p>Backend events, command payloads, and device responses</p>
+                </div>
+              </div>
+
+              <div class="diagnostics-log-shell">
+                <div class="log-list backend-log-list" id="backendLogList"></div>
+              </div>
             </div>
           </div>
         </section>

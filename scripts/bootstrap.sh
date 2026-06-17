@@ -6,10 +6,10 @@ INSTALL_DIR="${REBOT_ARM_WEBUI_DIR:-$HOME/robot-arm-webui}"
 
 if [ -e "$INSTALL_DIR/.git" ]; then
   git -C "$INSTALL_DIR" fetch --tags
-  git -C "$INSTALL_DIR" checkout v0.1
+  git -C "$INSTALL_DIR" checkout v0.2
 else
   git clone "$REPO_URL" "$INSTALL_DIR"
-  git -C "$INSTALL_DIR" checkout v0.1
+  git -C "$INSTALL_DIR" checkout v0.2
 fi
 
 "$INSTALL_DIR/scripts/install.sh"

@@ -341,7 +341,9 @@ class RealArmBridge:
         self._permission_hint: str | None = None
         self._events: list[dict] = []
         self._monitoring = False
+        self._enabled = False
         self._zero_offset_raw: np.ndarray | None = None
+        self._zero_last_set_at = 0.0
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._scan_loop, name="real-arm-scan", daemon=True)
         self._thread.start()
@@ -369,6 +371,7 @@ class RealArmBridge:
             except Exception as exc:
                 self._last_error = str(exc)
         self._connected = False
+        self._enabled = False
         self._monitoring = False
 
     def _close_arm_locked(self) -> None:
@@ -382,6 +385,7 @@ class RealArmBridge:
         self._gripper_controller = None
         self._gripper_vendor = None
         self._connected = False
+        self._enabled = False
         self._monitoring = False
 
     def _ensure_arm_locked(self):
@@ -402,10 +406,11 @@ class RealArmBridge:
     def _calibrate_zero_locked(self, reason: str) -> np.ndarray:
         zero = self._read_stable_positions_locked()
         self._zero_offset_raw = zero.copy()
+        self._zero_last_set_at = time.time()
         self._log_locked(
             "calibration",
             reason,
-            zero_offset_raw=self._zero_offset_raw.tolist(),
+            zero_reference_before_rad=self._zero_offset_raw.tolist(),
         )
         return self._zero_offset_raw
 
@@ -440,6 +445,7 @@ class RealArmBridge:
             self._close_arm_locked()
             self._active_channel = channel
             self._zero_offset_raw = None
+            self._zero_last_set_at = 0.0
 
     def _find_controller_for_vendor_locked(self, arm, vendor: str):
         ctrl_map = getattr(arm, "_ctrl_map", {})
@@ -450,30 +456,41 @@ class RealArmBridge:
                 return next(iter(ctrl_map.values()))
         return None
 
-    def _ensure_gripper_attached_locked(self) -> None:
-        if self._gripper_motor is not None and self._gripper_controller is not None:
-            return
-        if self._arm is None:
-            raise RuntimeError("真实机械臂未初始化，无法挂载夹爪")
+    def _gripper_config_locked(self) -> dict | None:
         if not GRIPPER_CFG.is_file():
-            raise RuntimeError(f"未找到夹爪配置文件: {GRIPPER_CFG}")
-
+            return None
         data = yaml.safe_load(GRIPPER_CFG.read_text(encoding="utf-8")) or {}
         if not isinstance(data, dict):
             raise RuntimeError(f"夹爪配置格式无效: {GRIPPER_CFG}")
         gripper_list = data.get("gripper") or []
         if not gripper_list:
             raise RuntimeError(f"夹爪配置缺少 gripper 节点: {GRIPPER_CFG}")
-
         gripper = gripper_list[0] or {}
-        vendor = str(gripper.get("vendor", "damiao")).lower()
+        return {
+            "name": str(gripper.get("name") or "gripper"),
+            "vendor": str(gripper.get("vendor", "damiao")).lower(),
+            "motor_id": int(gripper.get("motor_id", 0x07)),
+            "feedback_id": int(gripper.get("feedback_id", 0x17)),
+            "model": str(gripper.get("model", "4310")),
+        }
+
+    def _ensure_gripper_attached_locked(self) -> None:
+        if self._gripper_motor is not None and self._gripper_controller is not None:
+            return
+        if self._arm is None:
+            raise RuntimeError("真实机械臂未初始化，无法挂载夹爪")
+        cfg = self._gripper_config_locked()
+        if cfg is None:
+            raise RuntimeError(f"未找到夹爪配置文件: {GRIPPER_CFG}")
+
+        vendor = cfg["vendor"]
         ctrl = self._find_controller_for_vendor_locked(self._arm, vendor)
         if ctrl is None:
             raise RuntimeError(f"未找到夹爪控制器: vendor={vendor!r}")
 
-        motor_id = int(gripper.get("motor_id", 0x07))
-        feedback_id = int(gripper.get("feedback_id", 0x17))
-        model = str(gripper.get("model", "4310"))
+        motor_id = cfg["motor_id"]
+        feedback_id = cfg["feedback_id"]
+        model = cfg["model"]
 
         if vendor == "damiao":
             mot = ctrl.add_damiao_motor(motor_id, feedback_id, model)
@@ -513,6 +530,45 @@ class RealArmBridge:
             "torq": float(getattr(state, "torq", 0.0)),
         }
 
+    def _set_gripper_zero_locked(self, poll_max: int = 200, poll_interval: float = 0.05) -> dict:
+        self._ensure_gripper_attached_locked()
+        if self._gripper_motor is None or self._gripper_controller is None:
+            raise RuntimeError("夹爪未挂载到当前控制器")
+
+        before = self._gripper_state_locked(request=True)
+        try:
+            self._gripper_controller.disable_all()
+        except Exception as exc:
+            raise RuntimeError(f"夹爪失能失败: {exc}") from exc
+
+        ready = False
+        for _ in range(max(1, poll_max)):
+            state = self._gripper_state_locked(request=True)
+            if state is not None and state.get("status_code") == 0:
+                ready = True
+                break
+            time.sleep(poll_interval)
+        if not ready:
+            raise RuntimeError("夹爪等待失能就绪超时")
+
+        try:
+            self._gripper_motor.set_zero_position()
+        except Exception as exc:
+            raise RuntimeError(f"夹爪写入 0 点失败: {exc}") from exc
+
+        time.sleep(0.2)
+        after = self._gripper_state_locked(request=True)
+        self._log_locked(
+            "calibration",
+            "joint7 / 夹爪 0 点已重写",
+            gripper_state_before=before,
+            gripper_state_after=after,
+        )
+        return {
+            "before": before,
+            "after": after,
+        }
+
     def _runtime_cfg_locked(self) -> Path:
         if self._active_channel == ARM_CHANNEL:
             return ARM_CFG
@@ -549,33 +605,8 @@ class RealArmBridge:
             return
 
         arm = self._ensure_arm_locked()
-        # Detection signal: actively request motor feedback and poll the Damiao serial bridge.
-        # RobotArm.connect() is a no-op in the reference library; feedback is the real handshake.
-        for _ in range(3):
-            arm._request_and_poll()
-            time.sleep(0.05)
-        motors = []
-        detected = False
-        for joint in arm._joints:
-            state = None
-            try:
-                state = arm._motor_map[joint.name].get_state()
-            except Exception:
-                state = None
-            if state is not None:
-                detected = True
-                motors.append(
-                    {
-                        "name": joint.name,
-                        "motor_id": joint.motor_id,
-                        "feedback_id": joint.feedback_id,
-                        "model": joint.model,
-                        "status_code": getattr(state, "status_code", None),
-                        "pos": float(getattr(state, "pos", 0.0)),
-                        "vel": float(getattr(state, "vel", 0.0)),
-                        "torq": float(getattr(state, "torq", 0.0)),
-                    }
-                )
+        motors = self._collect_motor_feedback_locked(arm)
+        detected = bool(motors)
         self._detected = detected
         self._motors = motors
         self._permission_required = False
@@ -587,6 +618,67 @@ class RealArmBridge:
             f"读取到 {len(motors)} 个电机反馈" if detected else "未读取到电机反馈",
             motors=motors,
         )
+
+    def _collect_motor_feedback_locked(self, arm=None, polls: int = 3, interval_s: float = 0.05) -> list[dict]:
+        arm = arm or self._ensure_arm_locked()
+        # RobotArm.connect() is a no-op in the reference library; feedback is the real handshake.
+        for _ in range(max(1, polls)):
+            arm._request_and_poll()
+            time.sleep(interval_s)
+
+        motors = []
+        for joint in arm._joints:
+            state = None
+            try:
+                state = arm._motor_map[joint.name].get_state()
+            except Exception:
+                state = None
+            if state is None:
+                continue
+            motors.append(
+                {
+                    "name": joint.name,
+                    "motor_id": joint.motor_id,
+                    "feedback_id": joint.feedback_id,
+                    "model": joint.model,
+                    "status_code": getattr(state, "status_code", None),
+                    "pos": float(getattr(state, "pos", 0.0)),
+                    "vel": float(getattr(state, "vel", 0.0)),
+                    "torq": float(getattr(state, "torq", 0.0)),
+                }
+            )
+        try:
+            gripper_cfg = self._gripper_config_locked()
+            if gripper_cfg is not None:
+                self._ensure_gripper_attached_locked()
+                gripper_state = self._gripper_state_locked(request=True)
+                if gripper_state is not None:
+                    motor_id = int(gripper_cfg["motor_id"])
+                    feedback_id = int(gripper_cfg["feedback_id"])
+                    exists = any(
+                        int(motor.get("motor_id", -1)) == motor_id
+                        and int(motor.get("feedback_id", -1)) == feedback_id
+                        for motor in motors
+                    )
+                    if not exists:
+                        motors.append(
+                            {
+                                "name": f"joint{motor_id}",
+                                "motor_id": motor_id,
+                                "feedback_id": feedback_id,
+                                "model": gripper_cfg["model"],
+                                "status_code": gripper_state.get("status_code"),
+                                "pos": float(gripper_state.get("pos", 0.0)),
+                                "vel": float(gripper_state.get("vel", 0.0)),
+                                "torq": float(gripper_state.get("torq", 0.0)),
+                                "alias": gripper_cfg["name"],
+                                "role": "gripper_motor",
+                                "vendor": gripper_cfg["vendor"],
+                            }
+                        )
+        except Exception:
+            pass
+        return motors
 
     def _scan_loop(self) -> None:
         while not self._stop.is_set():
@@ -606,9 +698,21 @@ class RealArmBridge:
 
     def health(self) -> dict:
         with self._lock:
+            gripper_cfg = None
+            gripper_state = None
+            try:
+                gripper_cfg = self._gripper_config_locked()
+            except Exception:
+                gripper_cfg = None
+            try:
+                if self._gripper_motor is not None and self._gripper_controller is not None:
+                    gripper_state = self._gripper_state_locked(request=False)
+            except Exception:
+                gripper_state = None
             return {
                 "ok": True,
                 "connected": self._connected,
+                "enabled": self._enabled,
                 "arm_detected": self._detected,
                 "interface_present": self._interface_present,
                 "channel": self._active_channel,
@@ -619,6 +723,14 @@ class RealArmBridge:
                 "real_arm_available": RobotArm is not None,
                 "gripper_available": GRIPPER_CFG.is_file() and Mode is not None,
                 "gripper_attached": self._gripper_motor is not None and self._gripper_controller is not None,
+                "gripper_name": gripper_cfg["name"] if gripper_cfg else None,
+                "gripper_vendor": gripper_cfg["vendor"] if gripper_cfg else None,
+                "gripper_model": gripper_cfg["model"] if gripper_cfg else None,
+                "gripper_motor_id": gripper_cfg["motor_id"] if gripper_cfg else None,
+                "gripper_feedback_id": gripper_cfg["feedback_id"] if gripper_cfg else None,
+                "gripper_state": gripper_state,
+                "zero_calibrated": self._zero_offset_raw is not None,
+                "zero_last_set_at": self._zero_last_set_at or None,
                 "permission_required": self._permission_required,
                 "permission_hint": self._permission_hint,
                 "error": self._last_error,
@@ -658,12 +770,13 @@ class RealArmBridge:
                 return {**self.health(), "ok": False, "message": "连接前未读取到电机反馈，请检查机械臂供电和通信线"}
             try:
                 arm.enable(retries=5, poll_interval=0.05)
+                self._enabled = True
             except Exception as exc:
+                self._enabled = False
                 self._last_error = str(exc)
                 self._log_locked("connect", f"机械臂使能失败: {exc}")
                 return {**self.health(), "ok": False, "message": f"机械臂使能失败: {exc}"}
             self._connected = True
-            self._zero_offset_raw = None
             try:
                 self._ensure_gripper_attached_locked()
             except Exception as exc:
@@ -712,6 +825,177 @@ class RealArmBridge:
                 self._motors = []
             self._log_locked("disconnect", "real arm disconnected")
             return self.health()
+
+    def debug_action(self, action: str) -> dict:
+        with self._lock:
+            action = str(action or "").lower()
+            if action == "scan":
+                return self._debug_scan_locked()
+            if action == "feedback":
+                return self._debug_feedback_locked()
+            if action == "enable":
+                return self._debug_enable_locked()
+            if action == "disable":
+                return self._debug_disable_locked()
+            if action == "calibrate":
+                return self._debug_calibrate_locked()
+            return {**self.health(), "ok": False, "message": f"unsupported debug action: {action}"}
+
+    def _debug_scan_locked(self) -> dict:
+        try:
+            if self._connected and self._arm is not None:
+                self._motors = self._collect_motor_feedback_locked(self._arm)
+                self._detected = bool(self._motors)
+                self._last_scan_at = time.time()
+                self._last_error = None if self._detected else "未读取到电机反馈"
+            else:
+                self._scan_once_locked()
+        except Exception as exc:
+            self._last_error = str(exc)
+            self._log_locked("debug", f"重新扫描失败: {exc}")
+            return {**self.health(), "ok": False, "message": f"重新扫描失败: {exc}"}
+        self._last_error = None if self._detected or self._interface_present else self._last_error
+        message = "已重新扫描接口和电机反馈"
+        self._log_locked("debug", message, motors=self._motors, interfaces=self._interfaces)
+        return {**self.health(), "ok": True, "message": message}
+
+    def _debug_feedback_locked(self) -> dict:
+        if self._permission_required:
+            return {**self.health(), "ok": False, "message": self._permission_hint or "串口权限不足"}
+        if not self._interface_present:
+            return {**self.health(), "ok": False, "message": "未检测到 /dev/ttyACM* 设备"}
+        try:
+            arm = self._ensure_arm_locked()
+            self._motors = self._collect_motor_feedback_locked(arm)
+            self._detected = bool(self._motors)
+            self._last_scan_at = time.time()
+            self._last_error = None if self._detected else "未读取到电机反馈"
+        except Exception as exc:
+            self._last_error = str(exc)
+            self._log_locked("debug", f"读取反馈失败: {exc}")
+            return {**self.health(), "ok": False, "message": f"读取反馈失败: {exc}"}
+        self._last_error = None if self._motors else self._last_error
+        message = f"已读取到 {len(self._motors)} 路电机反馈" if self._motors else "未读取到电机反馈"
+        self._log_locked("debug", message, motors=self._motors)
+        return {**self.health(), "ok": bool(self._motors), "message": message}
+
+    def _debug_enable_locked(self) -> dict:
+        if self._permission_required:
+            return {**self.health(), "ok": False, "message": self._permission_hint or "串口权限不足"}
+        try:
+            if not self._interface_present:
+                self._scan_once_locked()
+            arm = self._ensure_arm_locked()
+            self._motors = self._collect_motor_feedback_locked(arm)
+            self._detected = bool(self._motors)
+            if not self._detected:
+                return {**self.health(), "ok": False, "message": "未读取到电机反馈，无法执行使能"}
+            arm.enable(retries=5, poll_interval=0.05)
+            self._enabled = True
+            try:
+                self._ensure_gripper_attached_locked()
+            except Exception as exc:
+                self._log_locked("gripper", f"夹爪挂载失败: {exc}")
+        except Exception as exc:
+            self._enabled = False
+            self._last_error = str(exc)
+            self._log_locked("debug", f"机械臂使能失败: {exc}")
+            return {**self.health(), "ok": False, "message": f"机械臂使能失败: {exc}"}
+        self._last_error = None
+        message = "机械臂已使能"
+        self._log_locked("debug", message, connected=self._connected, motors=len(self._motors))
+        return {**self.health(), "ok": True, "message": message}
+
+    def _debug_disable_locked(self) -> dict:
+        try:
+            if self._arm is None:
+                return {**self.health(), "ok": False, "message": "机械臂控制器未初始化"}
+            self._stop_feedback_monitor_locked()
+            self._arm.disable(retries=5, poll_interval=0.05)
+            self._enabled = False
+        except Exception as exc:
+            self._last_error = str(exc)
+            self._log_locked("debug", f"机械臂失能失败: {exc}")
+            return {**self.health(), "ok": False, "message": f"机械臂失能失败: {exc}"}
+        self._last_error = None
+        message = "机械臂已失能"
+        self._log_locked("debug", message, connected=self._connected)
+        return {**self.health(), "ok": True, "message": message}
+
+    def _debug_calibrate_locked(self) -> dict:
+        if self._permission_required:
+            return {**self.health(), "ok": False, "message": self._permission_hint or "串口权限不足"}
+        if not self._connected or self._arm is None:
+            return {**self.health(), "ok": False, "message": "请先连接机械臂后再执行零点校准"}
+
+        zero_before = None
+        zero_after = None
+        gripper_zero_before = None
+        gripper_zero_after = None
+        arm_zero_written = False
+        gripper_zero_written = False
+        try:
+            self._stop_feedback_monitor_locked()
+            zero_before = self._calibrate_zero_locked("准备重写机械臂 0 点")
+            self._arm.set_zero(poll_max=200, poll_interval=0.05, set_zero_delay=0.12)
+            arm_zero_written = True
+            if GRIPPER_CFG.is_file():
+                gripper_zero = self._set_gripper_zero_locked(poll_max=200, poll_interval=0.05)
+                gripper_zero_before = gripper_zero.get("before")
+                gripper_zero_after = gripper_zero.get("after")
+                gripper_zero_written = True
+            self._enabled = False
+            time.sleep(0.35)
+            self._arm.enable(retries=5, poll_interval=0.05)
+            self._enabled = True
+            zero_after = self._read_stable_positions_locked(samples=5, interval_s=0.03)
+            if gripper_zero_written:
+                gripper_zero_after = self._gripper_state_locked(request=True)
+            self._motors = self._collect_motor_feedback_locked(self._arm)
+            self._detected = bool(self._motors)
+            self._last_scan_at = time.time()
+            self._last_error = None
+        except Exception as exc:
+            self._last_error = str(exc)
+            message = f"机械臂零点校准失败: {exc}"
+            if arm_zero_written and not gripper_zero_written:
+                message = f"机械臂 1-6 轴 0 点已重写，但 joint7 / 夹爪校准失败: {exc}"
+            elif arm_zero_written and gripper_zero_written:
+                message = f"机械臂与夹爪 0 点已重写，但重新使能失败: {exc}"
+            self._log_locked(
+                "calibration",
+                message,
+                zero_reference_before_rad=zero_before.tolist() if zero_before is not None else None,
+                zero_reference_after_rad=zero_after.tolist() if zero_after is not None else None,
+                gripper_state_before=gripper_zero_before,
+                gripper_state_after=gripper_zero_after,
+            )
+            return {**self.health(), "ok": False, "message": message}
+
+        message = "机械臂与夹爪 0 点已重写并重新使能" if gripper_zero_written else "机械臂 0 点已重写并重新使能"
+        self._log_locked(
+            "calibration",
+            message,
+            zero_reference_before_rad=zero_before.tolist() if zero_before is not None else None,
+            zero_reference_after_rad=zero_after.tolist() if zero_after is not None else None,
+            gripper_state_before=gripper_zero_before,
+            gripper_state_after=gripper_zero_after,
+            gripper_zero_written=gripper_zero_written,
+            connected=self._connected,
+        )
+        result = self.state()
+        result.update(
+            {
+                "ok": True,
+                "message": message,
+                "zero_reference_before_rad": zero_before.tolist() if zero_before is not None else None,
+                "zero_reference_after_rad": zero_after.tolist() if zero_after is not None else None,
+                "gripper_state_before": gripper_zero_before,
+                "gripper_state_after": gripper_zero_after,
+                "gripper_zero_written": gripper_zero_written,
+            }
+        )
+        return result
 
     def command_gripper(self, action: str) -> dict:
         with self._lock:
@@ -837,6 +1121,7 @@ class RealArmBridge:
                 steps=steps,
             )
             self._arm.enable(retries=5, poll_interval=0.05)
+            self._enabled = True
             self._arm.mode_pos_vel(vlim=slow_vlim, stabilize_delay=0.1)
 
             target_ref = {"q": current.copy()}
@@ -971,6 +1256,10 @@ class Handler(SimpleHTTPRequestHandler):
 
             if path == "/permissions/serial":
                 _json_response(self, REAL_ARM.configure_serial_permission())
+                return
+
+            if path == "/debug/arm":
+                _json_response(self, REAL_ARM.debug_action(str(payload.get("action") or "")))
                 return
 
             if path == "/gripper":
