@@ -24,11 +24,16 @@
 
 from .arm import RobotArm, JointCfg, load_cfg
 from .gripper import Gripper, GripperCfg, load_cfg as load_gripper_cfg
+from .rebotarm import RebotArm, JointGroup, NoOpGroup, load_cfg as load_rebotarm_cfg
 
 __all__ = [
     "RobotArm",
     "JointCfg",
     "load_cfg",
+    "RebotArm",
+    "JointGroup",
+    "NoOpGroup",
+    "load_rebotarm_cfg",
     "Gripper",
     "GripperCfg",
     "load_gripper_cfg",
