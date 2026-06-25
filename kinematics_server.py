@@ -13,7 +13,7 @@ import threading
 import time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import numpy as np
 import pinocchio as pin
@@ -46,17 +46,78 @@ def _resolve_rebot_root() -> Path:
 
 REBOT_ROOT = _resolve_rebot_root()
 ARM_CFG = REBOT_ROOT / "config" / "arm.yaml"
-URDF_ROOT = PUBLIC / "assets" / "urdf" / "reBot-DevArm_fixend_description"
-URDF_PATH = URDF_ROOT / "urdf" / "reBot-DevArm_fixend.urdf"
-PACKAGE_ALIAS = "reBot-DevArm_description_fixend"
-JOINT_NAME_MAP = {
-    "joint1": "joint1",
-    "joint2": "joint2",
-    "joint3": "join3",
-    "joint4": "joint4",
-    "joint5": "joint5",
-    "joint6": "joint6",
-}
+RS_CFG = REBOT_ROOT / "config" / "rebotarm_rs.yaml"
+PUBLIC_URDF_ROOT = PUBLIC / "assets" / "urdf"
+
+
+def _make_arm_profiles() -> dict[str, dict]:
+    dm_urdf_root = PUBLIC_URDF_ROOT / "reBot-DevArm_fixend_description"
+    rs_urdf_root = PUBLIC_URDF_ROOT / "reBot-DevArm-rs_asm-v3"
+    return {
+        "dm": {
+            "arm_type": "dm",
+            "label": "Damiao",
+            "driver": "dm",
+            "cfg_path": ARM_CFG,
+            "channel_kind": "serial",
+            "default_channel": "/dev/ttyACM0",
+            "urdf_root": dm_urdf_root,
+            "urdf_path": dm_urdf_root / "urdf" / "reBot-DevArm_fixend.urdf",
+            "urdf_url": "/assets/urdf/reBot-DevArm_fixend_description/urdf/reBot-DevArm_fixend.urdf",
+            "package_alias": "reBot-DevArm_description_fixend",
+            "package_url": "/assets/urdf/reBot-DevArm_fixend_description",
+            "end_effector_frame": "end_link",
+            "tcp_mesh": dm_urdf_root / "meshes" / "end_link.STL",
+            "tcp_axis": "max_x",
+            "controlled_joints": 6,
+            "joint_name_map": {
+                "joint1": "joint1",
+                "joint2": "joint2",
+                "joint3": "join3",
+                "joint4": "joint4",
+                "joint5": "joint5",
+                "joint6": "joint6",
+            },
+        },
+        "rs": {
+            "arm_type": "rs",
+            "label": "RS",
+            "driver": "rs",
+            "cfg_path": RS_CFG,
+            "channel_kind": "can",
+            "default_channel": "can1",
+            "urdf_root": rs_urdf_root,
+            "urdf_path": rs_urdf_root / "urdf" / "00-arm-rs_asm-v3.urdf",
+            "urdf_url": "/assets/urdf/reBot-DevArm-rs_asm-v3/urdf/00-arm-rs_asm-v3.urdf",
+            "package_alias": "reBot-DevArm-rs_asm-v3",
+            "package_url": "/assets/urdf/reBot-DevArm-rs_asm-v3",
+            "end_effector_frame": "gripper_end",
+            "tcp_mesh": rs_urdf_root / "meshes" / "gripper_end.STL",
+            "tcp_axis": "min_x",
+            "controlled_joints": 6,
+            "joint_name_map": {
+                "joint1": "joint1",
+                "joint2": "joint2",
+                "joint3": "joint3",
+                "joint4": "joint4",
+                "joint5": "joint5",
+                "joint6": "joint6",
+            },
+        },
+    }
+
+
+ARM_PROFILES = _make_arm_profiles()
+DEFAULT_ARM_TYPE = "rs" if os.getenv("REBOT_ARM_TYPE", "").lower() == "rs" else "dm"
+
+
+def _normalize_arm_type(value: str | None) -> str:
+    normalized = str(value or DEFAULT_ARM_TYPE).strip().lower()
+    return normalized if normalized in ARM_PROFILES else DEFAULT_ARM_TYPE
+
+
+def _profile_for_type(arm_type: str | None = None) -> dict:
+    return ARM_PROFILES[_normalize_arm_type(arm_type)]
 
 if REBOT_ROOT.exists():
     sys.path.insert(0, str(REBOT_ROOT))
@@ -70,6 +131,14 @@ else:
     ROBOT_ARM_IMPORT_ERROR = None
 
 try:
+    from reBotArm_control_py.actuator.rebotarm import RebotArm
+except Exception as exc:
+    RebotArm = None
+    REBOT_ARM_IMPORT_ERROR = str(exc)
+else:
+    REBOT_ARM_IMPORT_ERROR = None
+
+try:
     from motorbridge import Mode
 except Exception as exc:
     Mode = None
@@ -78,15 +147,15 @@ else:
     MOTORBRIDGE_IMPORT_ERROR = None
 
 
-def _load_arm_channel() -> str:
+def _load_profile_channel(profile: dict) -> str:
     try:
-        data = yaml.safe_load(ARM_CFG.read_text()) or {}
+        data = yaml.safe_load(Path(profile["cfg_path"]).read_text()) or {}
     except Exception:
-        return "/dev/ttyACM0"
-    return str(data.get("channel") or "/dev/ttyACM0")
+        return str(profile["default_channel"])
+    return str(data.get("channel") or profile["default_channel"])
 
 
-ARM_CHANNEL = _load_arm_channel()
+ARM_CHANNELS = {key: _load_profile_channel(profile) for key, profile in ARM_PROFILES.items()}
 GRIPPER_CFG = REBOT_ROOT / "config" / "gripper.yaml"
 
 
@@ -108,13 +177,22 @@ GRIPPER_POSITION_TOLERANCE_RAD = _env_float("GRIPPER_POSITION_TOLERANCE_RAD", 0.
 GRIPPER_MAX_WAIT_S = _env_float("GRIPPER_MAX_WAIT_S", 1.8)
 
 
-def _scan_interfaces() -> tuple[bool, list[str], str]:
+def _scan_interfaces(profile: dict | None = None) -> tuple[bool, list[str], str]:
+    profile = profile or _profile_for_type()
     system = platform.system().lower()
-    if system == "linux":
+    if system == "linux" and profile["channel_kind"] == "serial":
         devices = sorted(str(path) for path in Path("/dev").glob("ttyACM*"))
         if devices:
             return True, devices, "检测到 Linux ttyACM 设备"
         return False, [], "未检测到 /dev/ttyACM* 设备"
+    if system == "linux" and profile["channel_kind"] == "can":
+        configured = str(profile.get("channel") or profile["default_channel"])
+        devices = sorted(path.name for path in Path("/sys/class/net").glob("can*"))
+        if configured in devices:
+            return True, [configured], f"检测到 CAN 接口 {configured}"
+        if devices:
+            return True, devices, f"检测到 CAN 接口: {', '.join(devices)}"
+        return False, [], "未检测到 can* SocketCAN 接口"
     return False, [], f"当前系统 {platform.system()} 暂不执行真实机械臂自动扫描"
 
 
@@ -186,13 +264,12 @@ def _read_binary_stl_bounds(path: Path) -> tuple[np.ndarray, np.ndarray]:
     return arr.min(axis=0), arr.max(axis=0)
 
 
-def _compute_tcp_offset() -> np.ndarray:
-    # TCP is the gripper fingertip center in the end_link mesh frame.
-    # In this mesh the fingertip is the +X end; the -X end is the gripper body/motor side.
-    mesh_min, mesh_max = _read_binary_stl_bounds(URDF_ROOT / "meshes" / "end_link.STL")
+def _compute_tcp_offset(profile: dict) -> np.ndarray:
+    mesh_min, mesh_max = _read_binary_stl_bounds(Path(profile["tcp_mesh"]))
+    x = mesh_max[0] if profile.get("tcp_axis") == "max_x" else mesh_min[0]
     return np.array(
         [
-            mesh_max[0],
+            x,
             0.5 * (mesh_min[1] + mesh_max[1]),
             0.5 * (mesh_min[2] + mesh_max[2]),
         ],
@@ -200,9 +277,22 @@ def _compute_tcp_offset() -> np.ndarray:
     )
 
 
-MODEL = pin.buildModelFromUrdf(str(URDF_PATH))
-END_FRAME_ID = MODEL.getFrameId("end_link")
-TCP_OFFSET = _compute_tcp_offset()
+KINEMATICS_CACHE: dict[str, dict] = {}
+
+
+def _kinematics(arm_type: str | None = None) -> dict:
+    normalized = _normalize_arm_type(arm_type)
+    if normalized not in KINEMATICS_CACHE:
+        profile = _profile_for_type(normalized)
+        model = pin.buildModelFromUrdf(str(profile["urdf_path"]))
+        KINEMATICS_CACHE[normalized] = {
+            "profile": profile,
+            "model": model,
+            "end_frame_id": model.getFrameId(profile["end_effector_frame"]),
+            "tcp_offset": _compute_tcp_offset(profile),
+            "controlled_joints": int(profile["controlled_joints"]),
+        }
+    return KINEMATICS_CACHE[normalized]
 
 
 def _json_response(handler: SimpleHTTPRequestHandler, payload: dict, status: int = 200) -> None:
@@ -221,27 +311,50 @@ def _read_json_body(handler: SimpleHTTPRequestHandler) -> dict:
     return json.loads(handler.rfile.read(size).decode("utf-8"))
 
 
-def _clamp_config(q: np.ndarray) -> np.ndarray:
-    lo = np.asarray(MODEL.lowerPositionLimit, dtype=np.float64)
-    hi = np.asarray(MODEL.upperPositionLimit, dtype=np.float64)
+def _to_model_q(q: np.ndarray, kin: dict) -> np.ndarray:
+    model = kin["model"]
+    controlled = kin["controlled_joints"]
+    values = np.asarray(q, dtype=np.float64).reshape(-1)
+    if values.shape == (model.nq,):
+        return values
+    if values.shape != (controlled,):
+        raise ValueError(f"expected {controlled} joints, got {values.shape[0]}")
+    full_q = np.zeros(model.nq, dtype=np.float64)
+    full_q[:controlled] = values
+    return full_q
+
+
+def _controlled_q(q: np.ndarray, kin: dict) -> np.ndarray:
+    return np.asarray(q, dtype=np.float64).reshape(-1)[: kin["controlled_joints"]]
+
+
+def _clamp_config(q: np.ndarray, kin: dict) -> np.ndarray:
+    model = kin["model"]
+    lo = np.asarray(model.lowerPositionLimit, dtype=np.float64)
+    hi = np.asarray(model.upperPositionLimit, dtype=np.float64)
     lo = np.where(np.isfinite(lo), lo, -math.pi)
     hi = np.where(np.isfinite(hi), hi, math.pi)
     return np.minimum(np.maximum(q, lo), hi)
 
 
-def _tcp_pose_from_q(q: np.ndarray) -> pin.SE3:
-    data = MODEL.createData()
-    pin.forwardKinematics(MODEL, data, q)
-    pin.updateFramePlacements(MODEL, data)
-    end_pose = data.oMf[END_FRAME_ID]
-    return end_pose * pin.SE3(np.eye(3), TCP_OFFSET)
+def _tcp_pose_from_q(q: np.ndarray, kin: dict) -> pin.SE3:
+    model = kin["model"]
+    data = model.createData()
+    full_q = _to_model_q(q, kin)
+    pin.forwardKinematics(model, data, full_q)
+    pin.updateFramePlacements(model, data)
+    end_pose = data.oMf[kin["end_frame_id"]]
+    return end_pose * pin.SE3(np.eye(3), kin["tcp_offset"])
 
 
-def _fk(q: np.ndarray) -> dict:
-    tcp_pose = _tcp_pose_from_q(q)
+def _fk(q: np.ndarray, arm_type: str | None = None) -> dict:
+    kin = _kinematics(arm_type)
+    full_q = _to_model_q(q, kin)
+    tcp_pose = _tcp_pose_from_q(full_q, kin)
     return {
         "ok": True,
-        "joints_rad": q.tolist(),
+        "arm_type": kin["profile"]["arm_type"],
+        "joints_rad": _controlled_q(full_q, kin).tolist(),
         "end_effector": {
             "position_m": tcp_pose.translation.tolist(),
             "rpy_rad": pin.rpy.matrixToRpy(tcp_pose.rotation).tolist(),
@@ -249,29 +362,29 @@ def _fk(q: np.ndarray) -> dict:
     }
 
 
-def _ik_error(data: pin.Data, q: np.ndarray, target_tcp: pin.SE3) -> tuple[float, np.ndarray]:
-    pin.forwardKinematics(MODEL, data, q)
-    pin.updateFramePlacements(MODEL, data)
-    tcp_pose = data.oMf[END_FRAME_ID] * pin.SE3(np.eye(3), TCP_OFFSET)
+def _ik_error(kin: dict, data: pin.Data, q: np.ndarray, target_tcp: pin.SE3) -> tuple[float, np.ndarray]:
+    model = kin["model"]
+    pin.forwardKinematics(model, data, q)
+    pin.updateFramePlacements(model, data)
+    tcp_pose = data.oMf[kin["end_frame_id"]] * pin.SE3(np.eye(3), kin["tcp_offset"])
     err = pin.log6(tcp_pose.inverse() * target_tcp).vector
     return float(np.linalg.norm(err)), err
 
 
-def _solve_ik(target_tcp: pin.SE3, seed: np.ndarray, max_iter: int = 700) -> tuple[np.ndarray, bool, float, int]:
-    data = MODEL.createData()
-    q = _clamp_config(seed.copy())
-    prev_err, err = _ik_error(data, q, target_tcp)
+def _solve_ik(kin: dict, target_tcp: pin.SE3, seed: np.ndarray, max_iter: int = 700) -> tuple[np.ndarray, bool, float, int]:
+    model = kin["model"]
+    data = model.createData()
+    q = _clamp_config(_to_model_q(seed, kin).copy(), kin)
+    prev_err, err = _ik_error(kin, data, q, target_tcp)
 
     for iteration in range(max_iter):
         if prev_err < 1e-4:
             return q, True, prev_err, iteration
 
-        pin.computeJointJacobians(MODEL, data, q)
-        pin.updateFramePlacements(MODEL, data)
-        end_pose = data.oMf[END_FRAME_ID]
-        tcp_pose = end_pose * pin.SE3(np.eye(3), TCP_OFFSET)
-        j_end = pin.getFrameJacobian(MODEL, data, END_FRAME_ID, pin.LOCAL)
-        adjoint = pin.SE3(np.eye(3), TCP_OFFSET).inverse().action
+        pin.computeJointJacobians(model, data, q)
+        pin.updateFramePlacements(model, data)
+        j_end = pin.getFrameJacobian(model, data, kin["end_frame_id"], pin.LOCAL)
+        adjoint = pin.SE3(np.eye(3), kin["tcp_offset"]).inverse().action
         j_tcp = adjoint @ j_end
 
         lam = 1e-6 * max(1.0, prev_err * 10.0)
@@ -282,8 +395,8 @@ def _solve_ik(target_tcp: pin.SE3, seed: np.ndarray, max_iter: int = 700) -> tup
         alpha = 1.0
         improved = False
         for _ in range(5):
-            q_new = _clamp_config(pin.integrate(MODEL, q, alpha * dq))
-            new_err, new_vec = _ik_error(data, q_new, target_tcp)
+            q_new = _clamp_config(pin.integrate(model, q, alpha * dq), kin)
+            new_err, new_vec = _ik_error(kin, data, q_new, target_tcp)
             if new_err < prev_err:
                 q, err, prev_err = q_new, new_vec, new_err
                 improved = True
@@ -295,13 +408,15 @@ def _solve_ik(target_tcp: pin.SE3, seed: np.ndarray, max_iter: int = 700) -> tup
     return q, False, prev_err, max_iter
 
 
-def _solve_ik_with_retries(target_tcp: pin.SE3, seed: np.ndarray) -> tuple[np.ndarray, bool, float, int]:
-    best_q, best_ok, best_error, best_iter = _solve_ik(target_tcp, seed)
+def _solve_ik_with_retries(target_tcp: pin.SE3, seed: np.ndarray, arm_type: str | None = None) -> tuple[np.ndarray, bool, float, int]:
+    kin = _kinematics(arm_type)
+    model = kin["model"]
+    best_q, best_ok, best_error, best_iter = _solve_ik(kin, target_tcp, seed)
     if best_ok:
-        return best_q, best_ok, best_error, best_iter
+        return _controlled_q(best_q, kin), best_ok, best_error, best_iter
 
-    lo = np.asarray(MODEL.lowerPositionLimit, dtype=np.float64)
-    hi = np.asarray(MODEL.upperPositionLimit, dtype=np.float64)
+    lo = np.asarray(model.lowerPositionLimit, dtype=np.float64)
+    hi = np.asarray(model.upperPositionLimit, dtype=np.float64)
     for _ in range(8):
         q_seed = np.array(
             [
@@ -313,18 +428,20 @@ def _solve_ik_with_retries(target_tcp: pin.SE3, seed: np.ndarray) -> tuple[np.nd
             ],
             dtype=np.float64,
         )
-        q, ok, error, iterations = _solve_ik(target_tcp, q_seed)
+        q, ok, error, iterations = _solve_ik(kin, target_tcp, q_seed)
         if error < best_error:
             best_q, best_ok, best_error, best_iter = q, ok, error, iterations
         if ok:
             break
-    return best_q, best_ok, best_error, best_iter
+    return _controlled_q(best_q, kin), best_ok, best_error, best_iter
 
 
 class RealArmBridge:
     def __init__(self, scan_interval: float = 2.0) -> None:
         self._scan_interval = scan_interval
         self._lock = threading.RLock()
+        self._active_arm_type = DEFAULT_ARM_TYPE
+        self._active_profile = _profile_for_type(self._active_arm_type)
         self._arm = None
         self._gripper_motor = None
         self._gripper_controller = None
@@ -333,8 +450,8 @@ class RealArmBridge:
         self._detected = False
         self._interface_present = False
         self._interfaces: list[str] = []
-        self._active_channel = ARM_CHANNEL
-        self._last_error = ROBOT_ARM_IMPORT_ERROR
+        self._active_channel = ARM_CHANNELS[self._active_arm_type]
+        self._last_error = self._driver_import_error_locked()
         self._last_scan_at = 0.0
         self._motors: list[dict] = []
         self._permission_required = False
@@ -347,6 +464,52 @@ class RealArmBridge:
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._scan_loop, name="real-arm-scan", daemon=True)
         self._thread.start()
+
+    def _driver_locked(self) -> str:
+        return str(self._active_profile["driver"])
+
+    def _is_rs_locked(self) -> bool:
+        return self._driver_locked() == "rs"
+
+    def _driver_import_error_locked(self) -> str | None:
+        if self._driver_locked() == "rs":
+            return REBOT_ARM_IMPORT_ERROR
+        return ROBOT_ARM_IMPORT_ERROR
+
+    def _driver_available_locked(self) -> bool:
+        if self._driver_locked() == "rs":
+            return RebotArm is not None
+        return RobotArm is not None
+
+    def _set_arm_type_locked(self, arm_type: str | None) -> None:
+        normalized = _normalize_arm_type(arm_type)
+        if normalized == self._active_arm_type:
+            return
+        self._close_arm_locked()
+        self._active_arm_type = normalized
+        self._active_profile = _profile_for_type(normalized)
+        self._active_channel = ARM_CHANNELS[normalized]
+        self._last_error = self._driver_import_error_locked()
+        self._detected = False
+        self._interface_present = False
+        self._interfaces = []
+        self._motors = []
+        self._permission_required = False
+        self._permission_hint = None
+        self._zero_offset_raw = None
+        self._zero_last_set_at = 0.0
+        self._log_locked("profile", f"已切换机械臂类型: {normalized}")
+
+    def set_arm_type(self, arm_type: str | None) -> dict:
+        with self._lock:
+            self._set_arm_type_locked(arm_type)
+            return self.health()
+
+    def _arm_group_locked(self, arm=None):
+        arm = arm or self._ensure_arm_locked()
+        if self._is_rs_locked():
+            return arm.arm
+        return arm
 
     def _log_locked(self, step: str, message: str, **data) -> None:
         self._events.insert(
@@ -367,7 +530,7 @@ class RealArmBridge:
             except Exception as exc:
                 self._last_error = str(exc)
             try:
-                self._arm.disable(retries=5, poll_interval=0.05)
+                self._disable_arm_locked()
             except Exception as exc:
                 self._last_error = str(exc)
         self._connected = False
@@ -389,17 +552,78 @@ class RealArmBridge:
         self._monitoring = False
 
     def _ensure_arm_locked(self):
-        if RobotArm is None:
+        if not self._driver_available_locked():
+            if self._is_rs_locked():
+                raise RuntimeError(f"RebotArm import failed: {REBOT_ARM_IMPORT_ERROR}")
             raise RuntimeError(f"RobotArm import failed: {ROBOT_ARM_IMPORT_ERROR}")
         if self._arm is None:
-            self._arm = RobotArm(str(self._runtime_cfg_locked()))
+            if self._is_rs_locked():
+                self._arm = RebotArm(str(self._runtime_cfg_locked()))
+                self._arm.connect()
+            else:
+                self._arm = RobotArm(str(self._runtime_cfg_locked()))
         return self._arm
 
-    def _read_stable_positions_locked(self, samples: int = 5, interval_s: float = 0.04) -> np.ndarray:
+    def _enable_arm_locked(self, retries: int = 5, poll_interval: float = 0.05, mode: str = "pos_vel", vlim=None) -> None:
         arm = self._ensure_arm_locked()
+        if self._is_rs_locked():
+            group = self._arm_group_locked(arm)
+            if mode == "mit":
+                group.mode_mit()
+            else:
+                group.mode_pos_vel(vlim=vlim)
+            arm.enable_all()
+            return
+        if mode == "pos_vel":
+            arm.mode_pos_vel(vlim=vlim, stabilize_delay=0.1)
+        elif mode == "mit":
+            arm.mode_mit(stabilize_delay=0.1)
+        arm.enable(retries=retries, poll_interval=poll_interval)
+
+    def _disable_arm_locked(self, retries: int = 5, poll_interval: float = 0.05) -> None:
+        arm = self._ensure_arm_locked()
+        if self._is_rs_locked():
+            arm.disable_all()
+        else:
+            arm.disable(retries=retries, poll_interval=poll_interval)
+
+    def _mode_pos_vel_locked(self, vlim=None, stabilize_delay: float = 0.1) -> None:
+        group = self._arm_group_locked()
+        if self._is_rs_locked():
+            group.mode_pos_vel(vlim=vlim)
+        else:
+            group.mode_pos_vel(vlim=vlim, stabilize_delay=stabilize_delay)
+
+    def _send_pos_vel_locked(self, q: np.ndarray, vlim=None) -> None:
+        group = self._arm_group_locked()
+        if self._is_rs_locked():
+            group.send_pos_vel(q, vlim=vlim)
+        else:
+            group.pos_vel(q, vlim=vlim)
+
+    def _get_positions_locked(self, request: bool = True) -> np.ndarray:
+        group = self._arm_group_locked()
+        if self._is_rs_locked():
+            return np.asarray(group.get_positions(request_feedback=request), dtype=np.float64)
+        return np.asarray(group.get_positions(request=request), dtype=np.float64)
+
+    def _get_velocities_locked(self, request: bool = True) -> np.ndarray:
+        group = self._arm_group_locked()
+        if self._is_rs_locked():
+            return np.asarray(group.get_velocities(request_feedback=request), dtype=np.float64)
+        return np.asarray(group.get_velocities(request=request), dtype=np.float64)
+
+    def _get_torques_locked(self, request: bool = True) -> np.ndarray:
+        if self._is_rs_locked():
+            pos, vel, torq = self._ensure_arm_locked().get_state(request_feedback=request)
+            return np.asarray(torq[: self._active_profile["controlled_joints"]], dtype=np.float64)
+        return np.asarray(self._arm_group_locked().get_torques(request=request), dtype=np.float64)
+
+    def _read_stable_positions_locked(self, samples: int = 5, interval_s: float = 0.04) -> np.ndarray:
+        self._ensure_arm_locked()
         readings = []
         for _ in range(max(1, samples)):
-            readings.append(np.asarray(arm.get_positions(request=True), dtype=np.float64))
+            readings.append(self._get_positions_locked(request=True))
             time.sleep(interval_s)
         return np.median(np.vstack(readings), axis=0)
 
@@ -422,12 +646,22 @@ class RealArmBridge:
             arm.stop_control_loop()
 
         def mit_monitor(ref, _dt):
-            ref.mit(
-                np.zeros(ref.num_joints),
-                kp=np.zeros(ref.num_joints),
-                kd=np.zeros(ref.num_joints),
-                tau=np.zeros(ref.num_joints),
-            )
+            group = ref.arm if self._is_rs_locked() else ref
+            n = int(group.num_joints)
+            if self._is_rs_locked():
+                group.send_mit(
+                    np.zeros(n),
+                    kp=np.zeros(n),
+                    kd=np.zeros(n),
+                    tau=np.zeros(n),
+                )
+            else:
+                group.mit(
+                    np.zeros(n),
+                    kp=np.zeros(n),
+                    kd=np.zeros(n),
+                    tau=np.zeros(n),
+                )
 
         arm.start_control_loop(mit_monitor)
         self._monitoring = True
@@ -457,6 +691,25 @@ class RealArmBridge:
         return None
 
     def _gripper_config_locked(self) -> dict | None:
+        if self._is_rs_locked():
+            try:
+                data = yaml.safe_load(Path(self._active_profile["cfg_path"]).read_text(encoding="utf-8")) or {}
+                group_joints = ((data.get("groups") or {}).get("gripper") or {}).get("joints") or []
+                if not group_joints:
+                    return None
+                joint_name = str(group_joints[0])
+                joint = next((item for item in data.get("joints", []) if str(item.get("name")) == joint_name), None)
+                if not joint:
+                    return None
+                return {
+                    "name": joint_name,
+                    "vendor": str(joint.get("vendor", "robstride")).lower(),
+                    "motor_id": int(joint.get("motor_id", 0x07)),
+                    "feedback_id": int(joint.get("feedback_id", 0xFD)),
+                    "model": str(joint.get("model", "rs-00")),
+                }
+            except Exception:
+                return None
         if not GRIPPER_CFG.is_file():
             return None
         data = yaml.safe_load(GRIPPER_CFG.read_text(encoding="utf-8")) or {}
@@ -492,7 +745,11 @@ class RealArmBridge:
         feedback_id = cfg["feedback_id"]
         model = cfg["model"]
 
-        if vendor == "damiao":
+        if self._is_rs_locked():
+            mot = getattr(self._arm, "_motor_map", {}).get(cfg["name"])
+            if mot is None:
+                raise RuntimeError(f"未找到 RS 夹爪电机: {cfg['name']}")
+        elif vendor == "damiao":
             mot = ctrl.add_damiao_motor(motor_id, feedback_id, model)
         elif vendor == "myactuator":
             mot = ctrl.add_myactuator_motor(motor_id, feedback_id, model)
@@ -506,6 +763,26 @@ class RealArmBridge:
         self._gripper_vendor = vendor
 
     def _gripper_state_locked(self, request: bool = True) -> dict | None:
+        if self._is_rs_locked() and self._arm is not None and getattr(self._arm, "has_gripper", False):
+            try:
+                cfg = self._gripper_config_locked()
+                if cfg is None:
+                    return None
+                group = self._arm.gripper
+                if request:
+                    group.get_positions(request_feedback=True)
+                mot = getattr(self._arm, "_motor_map", {}).get(cfg["name"])
+                state = mot.get_state() if mot is not None else None
+            except Exception:
+                return None
+            if state is None:
+                return None
+            return {
+                "status_code": getattr(state, "status_code", None),
+                "pos": float(getattr(state, "pos", 0.0)),
+                "vel": float(getattr(state, "vel", 0.0)),
+                "torq": float(getattr(state, "torq", 0.0)),
+            }
         if self._gripper_motor is None or self._gripper_controller is None:
             return None
         if request:
@@ -570,17 +847,19 @@ class RealArmBridge:
         }
 
     def _runtime_cfg_locked(self) -> Path:
-        if self._active_channel == ARM_CHANNEL:
-            return ARM_CFG
-        data = yaml.safe_load(ARM_CFG.read_text()) or {}
+        cfg_path = Path(self._active_profile["cfg_path"])
+        if self._active_channel == ARM_CHANNELS[self._active_arm_type]:
+            return cfg_path
+        data = yaml.safe_load(cfg_path.read_text()) or {}
         data["channel"] = self._active_channel
-        runtime_cfg = ROOT / ".runtime_arm.yaml"
+        runtime_cfg = ROOT / f".runtime_{self._active_arm_type}.yaml"
         runtime_cfg.write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
         return runtime_cfg
 
     def _scan_once_locked(self) -> None:
-        self._interface_present, self._interfaces, interface_message = _scan_interfaces()
-        self._set_active_channel_locked(self._interfaces[0] if self._interfaces else ARM_CHANNEL)
+        profile = {**self._active_profile, "channel": self._active_channel}
+        self._interface_present, self._interfaces, interface_message = _scan_interfaces(profile)
+        self._set_active_channel_locked(self._interfaces[0] if self._interfaces else ARM_CHANNELS[self._active_arm_type])
         if not self._interface_present:
             self._close_arm_locked()
             self._detected = False
@@ -592,7 +871,11 @@ class RealArmBridge:
             self._log_locked("scan", interface_message)
             return
 
-        has_permission, permission_hint = _device_permission_status(self._interfaces)
+        has_permission, permission_hint = (
+            _device_permission_status(self._interfaces)
+            if self._active_profile["channel_kind"] == "serial"
+            else (True, None)
+        )
         self._permission_required = not has_permission
         self._permission_hint = permission_hint
         if not has_permission:
@@ -621,13 +904,18 @@ class RealArmBridge:
 
     def _collect_motor_feedback_locked(self, arm=None, polls: int = 3, interval_s: float = 0.05) -> list[dict]:
         arm = arm or self._ensure_arm_locked()
-        # RobotArm.connect() is a no-op in the reference library; feedback is the real handshake.
+        # Feedback is the real handshake for both the DM serial bridge and RS CAN.
         for _ in range(max(1, polls)):
-            arm._request_and_poll()
+            if self._is_rs_locked():
+                arm.get_state(request_feedback=True)
+            else:
+                arm._request_and_poll()
             time.sleep(interval_s)
 
         motors = []
-        for joint in arm._joints:
+        joint_cfgs = getattr(arm, "_all_joints", None) if self._is_rs_locked() else getattr(arm, "_joints", None)
+        joint_cfgs = joint_cfgs or []
+        for joint in joint_cfgs:
             state = None
             try:
                 state = arm._motor_map[joint.name].get_state()
@@ -645,8 +933,12 @@ class RealArmBridge:
                     "pos": float(getattr(state, "pos", 0.0)),
                     "vel": float(getattr(state, "vel", 0.0)),
                     "torq": float(getattr(state, "torq", 0.0)),
+                    "vendor": getattr(joint, "vendor", self._active_profile["driver"]),
+                    "role": "gripper_motor" if str(joint.name) == "gripper" else "arm_joint",
                 }
             )
+        if self._is_rs_locked():
+            return motors
         try:
             gripper_cfg = self._gripper_config_locked()
             if gripper_cfg is not None:
@@ -711,6 +1003,12 @@ class RealArmBridge:
                 gripper_state = None
             return {
                 "ok": True,
+                "arm_type": self._active_arm_type,
+                "arm_label": self._active_profile["label"],
+                "arm_profiles": [
+                    {"type": key, "label": profile["label"], "channel_kind": profile["channel_kind"]}
+                    for key, profile in ARM_PROFILES.items()
+                ],
                 "connected": self._connected,
                 "enabled": self._enabled,
                 "arm_detected": self._detected,
@@ -720,8 +1018,9 @@ class RealArmBridge:
                 "detected_motors": self._motors,
                 "last_scan_at": self._last_scan_at,
                 "scan_interval_s": self._scan_interval,
-                "real_arm_available": RobotArm is not None,
-                "gripper_available": GRIPPER_CFG.is_file() and Mode is not None,
+                "real_arm_available": self._driver_available_locked(),
+                "real_arm_driver": self._driver_locked(),
+                "gripper_available": (self._is_rs_locked() and gripper_cfg is not None) or (GRIPPER_CFG.is_file() and Mode is not None),
                 "gripper_attached": self._gripper_motor is not None and self._gripper_controller is not None,
                 "gripper_name": gripper_cfg["name"] if gripper_cfg else None,
                 "gripper_vendor": gripper_cfg["vendor"] if gripper_cfg else None,
@@ -740,8 +1039,9 @@ class RealArmBridge:
         with self._lock:
             return {"ok": True, "events": self._events}
 
-    def connect(self, confirmed: bool = False) -> dict:
+    def connect(self, confirmed: bool = False, arm_type: str | None = None) -> dict:
         with self._lock:
+            self._set_arm_type_locked(arm_type)
             try:
                 self._scan_once_locked()
             except Exception as exc:
@@ -755,41 +1055,58 @@ class RealArmBridge:
                 return {**self.health(), "ok": False, "message": self._permission_hint or "无法连接真实机械臂"}
             if self._permission_required:
                 return {**self.health(), "ok": False, "message": self._permission_hint or "串口权限不足"}
-            if not self._detected:
+            
+            # RS 电机必须在使能后才能返回反馈，所以只要接口存在就可以连接
+            # DM 电机可以在未使能时返回反馈，需要检查反馈
+            if not self._is_rs_locked() and not self._detected:
                 self._log_locked("connect", "未读取到电机反馈，无法连接真实机械臂")
                 return {**self.health(), "ok": False, "message": "未读取到电机反馈，无法连接真实机械臂"}
+            
             if not confirmed:
                 self._log_locked("connect", "检测到电机反馈，等待用户确认连接", motors=len(self._motors))
                 return {**self.health(), "ok": True, "requires_confirmation": True}
             arm = self._ensure_arm_locked()
             arm.connect()
-            # Confirm one more time before marking the arm connected.
+            
+            # RS 电机使能后再读取反馈确认
+            self._enable_arm_locked(retries=5, poll_interval=0.05, mode="pos_vel")
+            self._enabled = True
+            
+            # 使能后再次扫描确认电机响应
             self._scan_once_locked()
-            if not self._detected:
+            if not self._is_rs_locked() and not self._detected:
                 self._log_locked("connect", "连接前未读取到电机反馈")
                 return {**self.health(), "ok": False, "message": "连接前未读取到电机反馈，请检查机械臂供电和通信线"}
-            try:
-                arm.enable(retries=5, poll_interval=0.05)
-                self._enabled = True
-            except Exception as exc:
-                self._enabled = False
-                self._last_error = str(exc)
-                self._log_locked("connect", f"机械臂使能失败: {exc}")
-                return {**self.health(), "ok": False, "message": f"机械臂使能失败: {exc}"}
             self._connected = True
             try:
                 self._ensure_gripper_attached_locked()
             except Exception as exc:
                 self._log_locked("gripper", f"夹爪挂载失败: {exc}")
-            self._log_locked("connect", "真实机械臂已连接并完成使能", channel=self._active_channel)
+            self._log_locked(
+                "connect",
+                "真实机械臂已连接并完成使能",
+                arm_type=self._active_arm_type,
+                channel=self._active_channel,
+                mode_before_enable=True,
+            )
             return {**self.health(), "ok": True, "message": "真实机械臂已连接并完成使能"}
 
     def configure_serial_permission(self) -> dict:
         with self._lock:
-            interface_present, interfaces, interface_message = _scan_interfaces()
+            if self._active_profile["channel_kind"] != "serial":
+                interface_present, interfaces, interface_message = _scan_interfaces({**self._active_profile, "channel": self._active_channel})
+                self._interface_present = interface_present
+                self._interfaces = interfaces
+                self._last_scan_at = time.time()
+                self._permission_required = False
+                self._permission_hint = None
+                self._last_error = None if interface_present else interface_message
+                return {**self.health(), "ok": interface_present, "message": interface_message}
+
+            interface_present, interfaces, interface_message = _scan_interfaces(self._active_profile)
             self._interface_present = interface_present
             self._interfaces = interfaces
-            self._set_active_channel_locked(interfaces[0] if interfaces else ARM_CHANNEL)
+            self._set_active_channel_locked(interfaces[0] if interfaces else ARM_CHANNELS[self._active_arm_type])
             if not interface_present:
                 self._permission_required = False
                 self._permission_hint = None
@@ -863,7 +1180,8 @@ class RealArmBridge:
         if self._permission_required:
             return {**self.health(), "ok": False, "message": self._permission_hint or "串口权限不足"}
         if not self._interface_present:
-            return {**self.health(), "ok": False, "message": "未检测到 /dev/ttyACM* 设备"}
+            missing = "未检测到 /dev/ttyACM* 设备" if self._active_profile["channel_kind"] == "serial" else "未检测到 can* SocketCAN 接口"
+            return {**self.health(), "ok": False, "message": missing}
         try:
             arm = self._ensure_arm_locked()
             self._motors = self._collect_motor_feedback_locked(arm)
@@ -886,12 +1204,22 @@ class RealArmBridge:
             if not self._interface_present:
                 self._scan_once_locked()
             arm = self._ensure_arm_locked()
+            
+            # RS 电机必须在使能后才能返回反馈，所以跳过预检查直接使能
+            # DM 电机可以在未使能时返回反馈，需要先检查反馈
+            if not self._is_rs_locked():
+                self._motors = self._collect_motor_feedback_locked(arm)
+                self._detected = bool(self._motors)
+                if not self._detected:
+                    return {**self.health(), "ok": False, "message": "未读取到电机反馈，无法执行使能"}
+            
+            self._enable_arm_locked(retries=5, poll_interval=0.05, mode="pos_vel")
+            self._enabled = True
+            
+            # 使能后再次读取反馈以确认
             self._motors = self._collect_motor_feedback_locked(arm)
             self._detected = bool(self._motors)
-            if not self._detected:
-                return {**self.health(), "ok": False, "message": "未读取到电机反馈，无法执行使能"}
-            arm.enable(retries=5, poll_interval=0.05)
-            self._enabled = True
+            
             try:
                 self._ensure_gripper_attached_locked()
             except Exception as exc:
@@ -911,7 +1239,7 @@ class RealArmBridge:
             if self._arm is None:
                 return {**self.health(), "ok": False, "message": "机械臂控制器未初始化"}
             self._stop_feedback_monitor_locked()
-            self._arm.disable(retries=5, poll_interval=0.05)
+            self._disable_arm_locked(retries=5, poll_interval=0.05)
             self._enabled = False
         except Exception as exc:
             self._last_error = str(exc)
@@ -937,16 +1265,19 @@ class RealArmBridge:
         try:
             self._stop_feedback_monitor_locked()
             zero_before = self._calibrate_zero_locked("准备重写机械臂 0 点")
-            self._arm.set_zero(poll_max=200, poll_interval=0.05, set_zero_delay=0.12)
+            if self._is_rs_locked():
+                self._arm.set_zero(poll_max=200, poll_interval=0.05)
+            else:
+                self._arm.set_zero(poll_max=200, poll_interval=0.05, set_zero_delay=0.12)
             arm_zero_written = True
-            if GRIPPER_CFG.is_file():
+            if not self._is_rs_locked() and GRIPPER_CFG.is_file():
                 gripper_zero = self._set_gripper_zero_locked(poll_max=200, poll_interval=0.05)
                 gripper_zero_before = gripper_zero.get("before")
                 gripper_zero_after = gripper_zero.get("after")
                 gripper_zero_written = True
             self._enabled = False
             time.sleep(0.35)
-            self._arm.enable(retries=5, poll_interval=0.05)
+            self._enable_arm_locked(retries=5, poll_interval=0.05, mode="pos_vel")
             self._enabled = True
             zero_after = self._read_stable_positions_locked(samples=5, interval_s=0.03)
             if gripper_zero_written:
@@ -1005,25 +1336,34 @@ class RealArmBridge:
             if not self._connected or self._arm is None:
                 self._log_locked("gripper", "真实机械臂未连接，无法控制夹爪", action=action)
                 return {**self.health(), "ok": False, "connected": False, "message": "真实机械臂未连接"}
-            if Mode is None:
+            if Mode is None and not self._is_rs_locked():
                 message = f"夹爪驱动不可用: {MOTORBRIDGE_IMPORT_ERROR}"
                 self._log_locked("gripper", message, action=action)
                 return {**self.health(), "ok": False, "message": message}
 
             try:
-                self._ensure_gripper_attached_locked()
                 target_pos = GRIPPER_OPEN_POS_RAD if action == "open" else GRIPPER_CLOSE_POS_RAD
-                if self._gripper_controller is None or self._gripper_motor is None:
-                    raise RuntimeError("夹爪未挂载到当前控制器")
-                self._gripper_controller.enable_all()
-                self._gripper_motor.ensure_mode(Mode.POS_VEL, 1000)
-                self._gripper_motor.send_pos_vel(float(target_pos), float(GRIPPER_VLIM))
-                try:
-                    self._gripper_controller.poll_feedback_once()
-                except Exception:
-                    pass
+                if self._is_rs_locked():
+                    if not self._arm.has_gripper:
+                        raise RuntimeError("当前 RS 配置未启用夹爪电机")
+                    self._arm.gripper.mode_pos_vel(vlim=np.array([GRIPPER_VLIM], dtype=np.float64))
+                    self._arm.gripper.enable()
+                    self._arm.gripper.send_pos_vel(np.array([target_pos], dtype=np.float64), vlim=np.array([GRIPPER_VLIM], dtype=np.float64))
+                    gripper_state = self._gripper_state_locked(request=True)
+                else:
+                    self._ensure_gripper_attached_locked()
+                    if self._gripper_controller is None or self._gripper_motor is None:
+                        raise RuntimeError("夹爪未挂载到当前控制器")
+                    self._gripper_controller.enable_all()
+                    self._gripper_motor.ensure_mode(Mode.POS_VEL, 1000)
+                    self._gripper_motor.send_pos_vel(float(target_pos), float(GRIPPER_VLIM))
+                    try:
+                        self._gripper_controller.poll_feedback_once()
+                    except Exception:
+                        pass
+                    gripper_state = None
                 time.sleep(min(0.2, GRIPPER_SETTLE_DELAY_S))
-                gripper_state = self._wait_for_gripper_target_locked(target_pos)
+                gripper_state = gripper_state or self._wait_for_gripper_target_locked(target_pos)
             except Exception as exc:
                 self._last_error = str(exc)
                 message = f"夹爪控制失败: {exc}"
@@ -1072,16 +1412,16 @@ class RealArmBridge:
             if not self._connected or self._arm is None:
                 return payload
             try:
-                pos = self._arm.get_positions(request=True)
-                vel = self._arm.get_velocities(request=True)
-                torq = self._arm.get_torques(request=True)
+                pos = self._get_positions_locked(request=True)
+                vel = self._get_velocities_locked(request=True)
+                torq = self._get_torques_locked(request=True)
                 payload.update(
                     {
                         "joints_rad": pos.tolist(),
                         "raw_joints_rad": pos.tolist(),
                         "velocities_rad_s": vel.tolist(),
                         "torques_nm": torq.tolist(),
-                        "end_effector": _fk(pos)["end_effector"],
+                        "end_effector": _fk(pos, self._active_arm_type)["end_effector"],
                     }
                 )
                 self._log_locked(
@@ -1101,13 +1441,15 @@ class RealArmBridge:
                 self._log_locked("move", "真实机械臂未连接，无法执行目标位置")
                 return {"ok": False, "connected": False, "message": "真实机械臂未连接"}
             self._stop_feedback_monitor_locked()
-            current = self._arm.get_positions(request=True)
-            target = _clamp_config(np.asarray(q, dtype=np.float64).reshape(-1))
+            current = self._get_positions_locked(request=True)
+            kin = _kinematics(self._active_arm_type)
+            target_full = _clamp_config(_to_model_q(np.asarray(q, dtype=np.float64).reshape(-1), kin), kin)
+            target = _controlled_q(target_full, kin)
             max_speed = float(np.clip(max_speed_rad_s, 0.05, 0.35))
             delta = target - current
             duration = float(np.clip(np.max(np.abs(delta)) / max_speed if delta.size else 0.0, 1.5, 8.0))
             steps = max(20, int(duration / 0.05))
-            slow_vlim = np.full(MODEL.nq, max_speed, dtype=np.float64)
+            slow_vlim = np.full(kin["controlled_joints"], max_speed, dtype=np.float64)
 
             self._log_locked(
                 "move",
@@ -1120,14 +1462,17 @@ class RealArmBridge:
                 duration_s=duration,
                 steps=steps,
             )
-            self._arm.enable(retries=5, poll_interval=0.05)
+            self._enable_arm_locked(retries=5, poll_interval=0.05, mode="pos_vel", vlim=slow_vlim)
             self._enabled = True
-            self._arm.mode_pos_vel(vlim=slow_vlim, stabilize_delay=0.1)
+            self._mode_pos_vel_locked(vlim=slow_vlim, stabilize_delay=0.1)
 
             target_ref = {"q": current.copy()}
 
             def pos_vel_controller(ref, _dt):
-                ref.pos_vel(target_ref["q"], vlim=slow_vlim)
+                if self._is_rs_locked():
+                    ref.arm.send_pos_vel(target_ref["q"], vlim=slow_vlim)
+                else:
+                    ref.pos_vel(target_ref["q"], vlim=slow_vlim)
 
             self._arm.start_control_loop(pos_vel_controller, rate=50.0)
             try:
@@ -1165,6 +1510,33 @@ class RealArmBridge:
 REAL_ARM = RealArmBridge(scan_interval=2.0)
 
 
+def _arm_type_from_query(parsed) -> str:
+    values = parse_qs(parsed.query).get("arm_type") or parse_qs(parsed.query).get("type") or []
+    return _normalize_arm_type(values[0] if values else None)
+
+
+def _sim_config_payload(arm_type: str | None = None) -> dict:
+    profile = _profile_for_type(arm_type)
+    kin = _kinematics(profile["arm_type"])
+    return {
+        "ok": True,
+        "arm_type": profile["arm_type"],
+        "arm_label": profile["label"],
+        "arm_profiles": [
+            {"type": key, "label": item["label"], "channel_kind": item["channel_kind"]}
+            for key, item in ARM_PROFILES.items()
+        ],
+        "urdf_url": profile["urdf_url"],
+        "package_alias": profile["package_alias"],
+        "package_url": profile["package_url"],
+        "joint_name_map": profile["joint_name_map"],
+        "end_effector_link": profile["end_effector_frame"],
+        "tcp_axis": profile["tcp_axis"],
+        "controlled_joints": kin["controlled_joints"],
+        "model_joints": kin["model"].nq,
+    }
+
+
 class Handler(SimpleHTTPRequestHandler):
     def log_message(self, format: str, *args) -> None:
         print(f"[webui] {self.address_string()} {format % args}")
@@ -1183,28 +1555,30 @@ class Handler(SimpleHTTPRequestHandler):
             _json_response(self, REAL_ARM.logs())
             return
         if path == "/sim/config":
-            _json_response(
-                self,
-                {
-                    "ok": True,
-                    "urdf_url": "/assets/urdf/reBot-DevArm_fixend_description/urdf/reBot-DevArm_fixend.urdf",
-                    "package_alias": PACKAGE_ALIAS,
-                    "package_url": "/assets/urdf/reBot-DevArm_fixend_description",
-                    "joint_name_map": JOINT_NAME_MAP,
-                },
-            )
+            _json_response(self, _sim_config_payload(_arm_type_from_query(parsed)))
+            return
+        if path == "/profile":
+            _json_response(self, {**REAL_ARM.health(), **_sim_config_payload(REAL_ARM.health().get("arm_type"))})
             return
         if path == "/assets/urdf/model.urdf":
-            self._send_file(URDF_PATH, "application/xml")
+            self._send_file(Path(_profile_for_type(REAL_ARM.health().get("arm_type"))["urdf_path"]), "application/xml")
             return
         if path.startswith("/assets/urdf/reBot-DevArm_fixend_description/"):
+            profile = ARM_PROFILES["dm"]
             asset = unquote(path.split("/assets/urdf/reBot-DevArm_fixend_description/", 1)[1]).lstrip("/")
-            self._send_file((URDF_ROOT / asset).resolve())
+            self._send_file((Path(profile["urdf_root"]) / asset).resolve())
             return
-        if path.startswith(f"/assets/urdf/package/{PACKAGE_ALIAS}/"):
-            asset = unquote(path.split(f"/assets/urdf/package/{PACKAGE_ALIAS}/", 1)[1]).lstrip("/")
-            self._send_file((URDF_ROOT / asset).resolve())
+        if path.startswith("/assets/urdf/reBot-DevArm-rs_asm-v3/"):
+            profile = ARM_PROFILES["rs"]
+            asset = unquote(path.split("/assets/urdf/reBot-DevArm-rs_asm-v3/", 1)[1]).lstrip("/")
+            self._send_file((Path(profile["urdf_root"]) / asset).resolve())
             return
+        for profile in ARM_PROFILES.values():
+            prefix = f"/assets/urdf/package/{profile['package_alias']}/"
+            if path.startswith(prefix):
+                asset = unquote(path.split(prefix, 1)[1]).lstrip("/")
+                self._send_file((Path(profile["urdf_root"]) / asset).resolve())
+                return
 
         if path in {"/", "/webui"}:
             self._send_file(DIST / "index.html", "text/html")
@@ -1221,15 +1595,18 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             payload = _read_json_body(self)
             path = urlparse(self.path).path
+            arm_type = _normalize_arm_type(payload.get("arm_type") or payload.get("type") or REAL_ARM.health().get("arm_type"))
 
             if path == "/sim/fk":
                 q = np.asarray(payload.get("joints_rad", []), dtype=np.float64).reshape(-1)
-                if q.shape != (MODEL.nq,):
-                    raise ValueError(f"expected {MODEL.nq} joints, got {q.shape[0]}")
-                _json_response(self, _fk(q))
+                kin = _kinematics(arm_type)
+                if q.shape[0] not in {kin["controlled_joints"], kin["model"].nq}:
+                    raise ValueError(f"expected {kin['controlled_joints']} joints, got {q.shape[0]}")
+                _json_response(self, _fk(q, arm_type))
                 return
 
             if path == "/sim/ik":
+                kin = _kinematics(arm_type)
                 pos = np.array([payload["x"], payload["y"], payload["z"]], dtype=np.float64)
                 rot = pin.rpy.rpyToMatrix(
                     float(payload.get("roll", 0.0)),
@@ -1237,17 +1614,21 @@ class Handler(SimpleHTTPRequestHandler):
                     float(payload.get("yaw", 0.0)),
                 )
                 target_tcp = pin.SE3(rot, pos)
-                seed = np.asarray(payload.get("seed_joints_rad") or np.zeros(MODEL.nq), dtype=np.float64).reshape(-1)
-                if seed.shape != (MODEL.nq,):
-                    seed = np.zeros(MODEL.nq, dtype=np.float64)
-                q, ok, error, iterations = _solve_ik_with_retries(target_tcp, seed)
-                result = _fk(q)
+                seed = np.asarray(payload.get("seed_joints_rad") or np.zeros(kin["controlled_joints"]), dtype=np.float64).reshape(-1)
+                if seed.shape[0] not in {kin["controlled_joints"], kin["model"].nq}:
+                    seed = np.zeros(kin["controlled_joints"], dtype=np.float64)
+                q, ok, error, iterations = _solve_ik_with_retries(target_tcp, seed, arm_type)
+                result = _fk(q, arm_type)
                 result.update({"ok": ok, "iterations": iterations, "error": error})
                 _json_response(self, result)
                 return
 
+            if path == "/profile":
+                _json_response(self, REAL_ARM.set_arm_type(arm_type))
+                return
+
             if path == "/connect":
-                _json_response(self, REAL_ARM.connect(confirmed=bool(payload.get("confirm"))))
+                _json_response(self, REAL_ARM.connect(confirmed=bool(payload.get("confirm")), arm_type=arm_type))
                 return
 
             if path == "/disconnect":
@@ -1268,13 +1649,14 @@ class Handler(SimpleHTTPRequestHandler):
 
             if path == "/move/joints":
                 q = np.asarray(payload.get("joints_rad", []), dtype=np.float64).reshape(-1)
-                if q.shape != (MODEL.nq,):
-                    raise ValueError(f"expected {MODEL.nq} joints, got {q.shape[0]}")
+                kin = _kinematics(arm_type)
+                if q.shape[0] not in {kin["controlled_joints"], kin["model"].nq}:
+                    raise ValueError(f"expected {kin['controlled_joints']} joints, got {q.shape[0]}")
                 if REAL_ARM.health().get("connected"):
                     speed = float(payload.get("max_speed_rad_s", 0.22))
                     _json_response(self, REAL_ARM.send_joints(q, max_speed_rad_s=speed))
                 else:
-                    result = _fk(q)
+                    result = _fk(q, arm_type)
                     result.update({"connected": False, "message": "simulation-only joint target"})
                     _json_response(self, result)
                 return
@@ -1299,13 +1681,30 @@ class Handler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
 
+def _find_available_port(start_port: int, max_attempts: int = 100) -> int:
+    """Find an available port starting from start_port."""
+    import socket
+    for port in range(start_port, start_port + max_attempts):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(("0.0.0.0", port))
+                return port
+        except OSError:
+            continue
+    raise RuntimeError(f"Could not find available port after {max_attempts} attempts")
+
+
 def _server_host_port() -> tuple[str, int]:
     host = os.getenv("HOST") or "0.0.0.0"
-    port_raw = os.getenv("PORT") or "8000"
-    try:
-        port = int(port_raw)
-    except ValueError as exc:
-        raise RuntimeError(f"invalid PORT: {port_raw}") from exc
+    port_raw = os.getenv("PORT") or ""
+    if port_raw:
+        try:
+            port = int(port_raw)
+        except ValueError as exc:
+            raise RuntimeError(f"invalid PORT: {port_raw}") from exc
+        return host, port
+    # No PORT specified, auto-find available port starting from 8000
+    port = _find_available_port(8000)
     return host, port
 
 
@@ -1316,7 +1715,7 @@ if __name__ == "__main__":
     except OSError as exc:
         if exc.errno == 98:
             print(
-                f"port {port} is already in use. Stop the existing service or run PORT={port + 1} npm run start.",
+                f"port {port} is already in use. Stop the existing service or run PORT=<port> npm run start.",
                 file=sys.stderr,
             )
         raise

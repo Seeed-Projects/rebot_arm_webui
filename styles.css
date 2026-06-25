@@ -319,7 +319,8 @@ html:lang(zh) {
   flex-wrap: wrap;
 }
 
-.language-select {
+.language-select,
+.arm-type-select {
   display: inline-flex;
   align-items: center;
   gap: var(--spacing-2);
@@ -334,18 +335,24 @@ html:lang(zh) {
   transition: border-color 150ms ease, background 150ms ease;
 }
 
-.language-select:hover {
+.language-select:hover,
+.arm-type-select:hover {
   border-color: var(--border-dark);
   background: var(--white);
 }
 
-.language-select select {
+.language-select select,
+.arm-type-select select {
   min-width: 88px;
   border: none;
   background: transparent;
   color: var(--neutral-700);
   outline: none;
   cursor: pointer;
+}
+
+.arm-type-select select {
+  min-width: 72px;
 }
 
 .badge {

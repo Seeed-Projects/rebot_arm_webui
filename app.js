@@ -4,10 +4,14 @@ import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 import URDFLoader from "urdf-loader";
 
 const fallbackSimConfig = {
+  armType: "dm",
+  armLabel: "Damiao",
   urdfUrl: "./assets/urdf/reBot-DevArm_fixend_description/urdf/reBot-DevArm_fixend.urdf",
   packageMap: {
     "reBot-DevArm_description_fixend": "./assets/urdf/reBot-DevArm_fixend_description/",
   },
+  endEffectorLink: "end_link",
+  tcpAxis: "max_x",
   jointNameMap: {
     joint1: "joint1",
     joint2: "joint2",
@@ -15,6 +19,28 @@ const fallbackSimConfig = {
     joint4: "joint4",
     joint5: "joint5",
     joint6: "joint6",
+  },
+};
+
+const fallbackSimConfigs = {
+  dm: fallbackSimConfig,
+  rs: {
+    armType: "rs",
+    armLabel: "RS",
+    urdfUrl: "./assets/urdf/reBot-DevArm-rs_asm-v3/urdf/00-arm-rs_asm-v3.urdf",
+    packageMap: {
+      "reBot-DevArm-rs_asm-v3": "./assets/urdf/reBot-DevArm-rs_asm-v3/",
+    },
+    endEffectorLink: "gripper_end",
+    tcpAxis: "min_x",
+    jointNameMap: {
+      joint1: "joint1",
+      joint2: "joint2",
+      joint3: "joint3",
+      joint4: "joint4",
+      joint5: "joint5",
+      joint6: "joint6",
+    },
   },
 };
 
@@ -30,7 +56,8 @@ const scenePalette = {
   robotMesh: 0xa3a3a3,
 };
 
-const joints = [
+// DM 版本关节限位
+const dmJoints = [
   { name: "joint1", urdfName: "joint1", motorId: "0x01", feedbackId: "0x11", model: "4340P", min: -160, max: 160, angle: 0 },
   { name: "joint2", urdfName: "joint2", motorId: "0x02", feedbackId: "0x12", model: "4340P", min: -180, max: 0, angle: 0 },
   { name: "joint3", urdfName: "join3", motorId: "0x03", feedbackId: "0x13", model: "4340P", min: -180, max: 0, angle: 0 },
@@ -38,6 +65,19 @@ const joints = [
   { name: "joint5", urdfName: "joint5", motorId: "0x05", feedbackId: "0x15", model: "4310", min: -180, max: 180, angle: 0 },
   { name: "joint6", urdfName: "joint6", motorId: "0x06", feedbackId: "0x16", model: "4310", min: -180, max: 180, angle: 0 },
 ];
+
+// RS 版本关节限位 (弧度转角度: joint2/joint3 是 0~180度，其他关节限位根据 URDF)
+const rsJoints = [
+  { name: "joint1", urdfName: "joint1", motorId: "0x01", feedbackId: "0xFD", model: "rs-06", min: -160, max: 160, angle: 0 },
+  { name: "joint2", urdfName: "joint2", motorId: "0x02", feedbackId: "0xFD", model: "rs-06", min: 0, max: 180, angle: 0 },
+  { name: "joint3", urdfName: "joint3", motorId: "0x03", feedbackId: "0xFD", model: "rs-06", min: 0, max: 180, angle: 0 },
+  { name: "joint4", urdfName: "joint4", motorId: "0x04", feedbackId: "0xFD", model: "rs-00", min: -90, max: 90, angle: 0 },
+  { name: "joint5", urdfName: "joint5", motorId: "0x05", feedbackId: "0xFD", model: "rs-00", min: -90, max: 90, angle: 0 },
+  { name: "joint6", urdfName: "joint6", motorId: "0x06", feedbackId: "0xFD", model: "rs-00", min: -180, max: 180, angle: 0 },
+];
+
+// 动态关节配置，根据 arm type 选择
+let joints = [...dmJoints];
 
 const state = {
   connected: false,
@@ -53,6 +93,11 @@ const state = {
   armPromptDismissed: false,
   armModalMode: "connect",
   apiMode: "mock",
+  armType: "dm",
+  armProfiles: [
+    { type: "dm", label: "Damiao", channel_kind: "serial" },
+    { type: "rs", label: "RS", channel_kind: "can" },
+  ],
   simConfig: fallbackSimConfig,
   mode: "positionControl",
   robot: null,
@@ -89,6 +134,7 @@ const translations = {
     aria: {
       mainNav: "主导航",
       language: "语言",
+      armType: "机械臂类型",
       viewMode: "视图模式",
       armViewport: "机械臂 3D URDF 仿真视图",
     },
@@ -111,7 +157,7 @@ const translations = {
       diagnosticsEyebrow: "诊断",
       diagnosticsTitle: "诊断",
     },
-    topbar: { language: "语言" },
+    topbar: { language: "语言", armType: "机械臂" },
     connection: { connected: "已连接", disconnected: "未连接" },
     button: {
       connectArm: "连接机械臂",
@@ -271,6 +317,7 @@ const translations = {
     aria: {
       mainNav: "Main navigation",
       language: "Language",
+      armType: "Arm type",
       viewMode: "View mode",
       armViewport: "Robot arm 3D URDF simulator",
     },
@@ -293,7 +340,7 @@ const translations = {
       diagnosticsEyebrow: "Diagnostics",
       diagnosticsTitle: "Diagnostics",
     },
-    topbar: { language: "Language" },
+    topbar: { language: "Language", armType: "Arm" },
     connection: { connected: "Connected", disconnected: "Disconnected" },
     button: {
       connectArm: "Connect Arm",
@@ -522,6 +569,7 @@ const els = {
   pageTitle: document.querySelector("#pageTitle"),
   systemActions: document.querySelector(".system-actions"),
   languageSelect: document.querySelector("#languageSelect"),
+  armTypeSelect: document.querySelector("#armTypeSelect"),
   connectionStatus: document.querySelector("#connectionStatus"),
   sidebarModeBadge: document.querySelector("#sidebarModeBadge"),
   jointList: document.querySelector("#jointList"),
@@ -584,6 +632,15 @@ function setConnectionIndicator({ connected, label }) {
   `;
 }
 
+function renderArmTypeOptions() {
+  if (!els.armTypeSelect) return;
+  const current = state.armType;
+  els.armTypeSelect.innerHTML = state.armProfiles
+    .map((profile) => `<option value="${escapeHtml(profile.type)}">${escapeHtml(profile.label || profile.type.toUpperCase())}</option>`)
+    .join("");
+  els.armTypeSelect.value = current;
+}
+
 function setSidebarModeBadge() {
   if (!els.sidebarModeBadge) return;
 
@@ -625,6 +682,7 @@ function applyStaticTranslations() {
     node.setAttribute("aria-label", t(node.dataset.i18nAriaLabel));
   });
   els.languageSelect.value = state.locale;
+  renderArmTypeOptions();
 }
 
 function animateLanguageSwitch() {
@@ -820,15 +878,26 @@ function setSolverStatus(message, warn = false) {
 async function apiJson(path, options = {}) {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), options.timeoutMs ?? 4500);
+  let requestPath = path;
+  const includeArmType = options.includeArmType !== false;
+  let body = options.body;
+  if (includeArmType) {
+    if (options.method && options.method !== "GET") {
+      body = { ...(body ?? {}), arm_type: state.armType };
+    } else {
+      const separator = requestPath.includes("?") ? "&" : "?";
+      requestPath = `${requestPath}${separator}arm_type=${encodeURIComponent(state.armType)}`;
+    }
+  }
 
   try {
-    const response = await fetch(path, {
+    const response = await fetch(requestPath, {
       method: options.method ?? "GET",
       headers: {
         "Content-Type": "application/json",
         ...(options.headers ?? {}),
       },
-      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      body: body === undefined ? undefined : JSON.stringify(body),
       signal: controller.signal,
     });
 
@@ -839,7 +908,7 @@ async function apiJson(path, options = {}) {
 
     const contentType = response.headers.get("content-type") ?? "";
     if (!contentType.includes("json")) {
-      throw new Error(`expected JSON response from ${path}`);
+      throw new Error(`expected JSON response from ${requestPath}`);
     }
     return response.json();
   } finally {
@@ -864,25 +933,55 @@ async function loadSimConfig() {
   try {
     const config = await apiJson("/sim/config", { timeoutMs: 1800 });
     const packageAlias = config.package_alias ?? "reBot-DevArm_description_fixend";
-    const packageUrl = (config.package_url ?? fallbackSimConfig.packageMap[packageAlias] ?? `/assets/urdf/package/${packageAlias}`).replace(/\/+$/, "");
+    const configArmType = config.arm_type ?? state.armType;
+    const localFallback = fallbackSimConfigs[configArmType] ?? fallbackSimConfig;
+    const packageUrl = (config.package_url ?? localFallback.packageMap[packageAlias] ?? `/assets/urdf/package/${packageAlias}`).replace(/\/+$/, "");
+    state.armType = config.arm_type ?? state.armType;
+    state.armProfiles = Array.isArray(config.arm_profiles) && config.arm_profiles.length ? config.arm_profiles : state.armProfiles;
+    
+    // 根据机械臂类型切换关节配置
+    if (state.armType === "rs") {
+      joints = rsJoints.map(j => ({ ...j }));
+    } else {
+      joints = dmJoints.map(j => ({ ...j }));
+    }
+    
     state.simConfig = {
-      urdfUrl: config.urdf_url ?? fallbackSimConfig.urdfUrl,
+      armType: config.arm_type ?? state.armType,
+      armLabel: config.arm_label ?? state.armType.toUpperCase(),
+      urdfUrl: config.urdf_url ?? localFallback.urdfUrl,
       packageMap: {
         [packageAlias]: packageUrl,
       },
-      jointNameMap: config.joint_name_map ?? fallbackSimConfig.jointNameMap,
+      jointNameMap: config.joint_name_map ?? localFallback.jointNameMap,
+      endEffectorLink: config.end_effector_link ?? localFallback.endEffectorLink,
+      tcpAxis: config.tcp_axis ?? localFallback.tcpAxis,
     };
     joints.forEach((joint) => {
       joint.urdfName = state.simConfig.jointNameMap[joint.name] ?? joint.urdfName;
     });
     applyBackendStatus(true);
     if (els.urdfPathText) els.urdfPathText.textContent = state.simConfig.urdfUrl;
+    renderArmTypeOptions();
     addLog("已读取后端仿真配置");
     return;
   } catch {
-    state.simConfig = fallbackSimConfig;
+    const localFallback = fallbackSimConfigs[state.armType] ?? fallbackSimConfig;
+    state.simConfig = { ...localFallback, armType: state.armType };
+    
+    // 根据机械臂类型切换关节配置
+    if (state.armType === "rs") {
+      joints = rsJoints.map(j => ({ ...j }));
+    } else {
+      joints = dmJoints.map(j => ({ ...j }));
+    }
+    
+    joints.forEach((joint) => {
+      joint.urdfName = state.simConfig.jointNameMap[joint.name] ?? joint.name;
+    });
     applyBackendStatus(false);
-    if (els.urdfPathText) els.urdfPathText.textContent = fallbackSimConfig.urdfUrl;
+    if (els.urdfPathText) els.urdfPathText.textContent = state.simConfig.urdfUrl;
+    renderArmTypeOptions();
     addLog("未检测到后端，使用本地 URDF 资源");
   }
 }
@@ -1181,7 +1280,8 @@ function updateRobotJoints() {
   });
 
   state.robot.updateMatrixWorld(true);
-  const endLink = state.robot.links?.end_link;
+  const endEffectorLink = state.simConfig.endEffectorLink ?? "end_link";
+  const endLink = state.robot.links?.[endEffectorLink];
   if (endLink) {
     getTcpWorldPosition(endLink, tcpMarker.position);
   }
@@ -1193,8 +1293,9 @@ function updateRobotJoints() {
 }
 
 function computeTcpLocalOffset() {
-  if (!state.robot?.links?.end_link) return;
-  const endLink = state.robot.links.end_link;
+  const endEffectorLink = state.simConfig.endEffectorLink ?? "end_link";
+  if (!state.robot?.links?.[endEffectorLink]) return;
+  const endLink = state.robot.links[endEffectorLink];
   state.robot.updateMatrixWorld(true);
   endLink.updateMatrixWorld(true);
   tempBox.setFromObject(endLink);
@@ -1217,9 +1318,9 @@ function computeTcpLocalOffset() {
     }
   }
 
-  // TCP is the gripper fingertip center. In this mesh the fingertip is the +X end.
+  const tcpX = state.simConfig.tcpAxis === "min_x" ? localMin.x : localMax.x;
   state.tcpLocalOffset = new THREE.Vector3(
-    localMax.x,
+    tcpX,
     (localMin.y + localMax.y) * 0.5,
     (localMin.z + localMax.z) * 0.5,
   );
@@ -1233,6 +1334,23 @@ function getTcpWorldPosition(endLink, target) {
 }
 
 function loadRobotModel() {
+  if (state.robot) {
+    scene.remove(state.robot);
+    state.robot.traverse((child) => {
+      if (child.isMesh) {
+        child.geometry?.dispose?.();
+        if (Array.isArray(child.material)) {
+          child.material.forEach((material) => material.dispose?.());
+        } else {
+          child.material?.dispose?.();
+        }
+      }
+    });
+    state.robot = null;
+  }
+  state.tcpLocalOffset = null;
+  setOverlay({ key: "overlay.loadingUrdf" }, true);
+
   const manager = new THREE.LoadingManager();
   const loader = new URDFLoader(manager);
   const stlLoader = new STLLoader(manager);
@@ -1282,6 +1400,36 @@ function loadRobotModel() {
       addLog("URDF 模型加载失败");
     },
   );
+}
+
+async function changeArmType(armType) {
+  const nextType = String(armType || "dm").toLowerCase();
+  if (nextType === state.armType && state.robot) return;
+  state.armType = nextType;
+  
+  // 根据机械臂类型切换关节配置
+  if (nextType === "rs") {
+    joints = rsJoints.map(j => ({ ...j }));
+  } else {
+    joints = dmJoints.map(j => ({ ...j }));
+  }
+  
+  renderArmTypeOptions();
+  try {
+    const profile = await apiJson("/profile", {
+      method: "POST",
+      body: { arm_type: nextType },
+      timeoutMs: 3000,
+    });
+    applyRealtimePayload(profile);
+  } catch {
+    applyBackendStatus(false);
+  }
+  await loadSimConfig();
+  loadRobotModel();
+  renderJoints();  // 重新渲染关节控件以应用新的限位
+  updateDerivedState();
+  await solveFkRealtime("modelLoad");
 }
 
 function renderJoints() {
@@ -1380,6 +1528,22 @@ function applyRealtimePayload(payload, { robotState = false } = {}) {
   if (!robotState && !payload.connected) state.lastRobotState = null;
   applyArmDetection(payload);
   applyBackendStatus(true);
+  
+  const prevArmType = state.armType;
+  if (payload.arm_type) state.armType = payload.arm_type;
+  
+  // 如果 arm_type 变了，更新关节限位
+  if (state.armType !== prevArmType) {
+    if (state.armType === "rs") {
+      joints = rsJoints.map(j => ({ ...j }));
+    } else {
+      joints = dmJoints.map(j => ({ ...j }));
+    }
+    renderJoints();  // 重新渲染控件
+  }
+  
+  if (Array.isArray(payload.arm_profiles) && payload.arm_profiles.length) state.armProfiles = payload.arm_profiles;
+  renderArmTypeOptions();
   state.connected = Boolean(payload.connected);
   state.enabled = "enabled" in payload ? Boolean(payload.enabled) : state.connected;
   if (Array.isArray(payload.joints_rad)) {
@@ -1520,7 +1684,8 @@ function estimateTcp() {
 
 function getUrdfEndEffectorPose() {
   if (!state.robot) return null;
-  const endLink = state.robot.links?.end_link;
+  const endEffectorLink = state.simConfig.endEffectorLink ?? "end_link";
+  const endLink = state.robot.links?.[endEffectorLink];
   if (!endLink) return null;
 
   state.robot.updateMatrixWorld(true);
@@ -2063,6 +2228,9 @@ function bindControls() {
   els.languageSelect.addEventListener("change", () => {
     setLanguage(els.languageSelect.value);
   });
+  els.armTypeSelect?.addEventListener("change", () => {
+    changeArmType(els.armTypeSelect.value);
+  });
   els.enableButton.addEventListener("click", handleConnectButton);
 
   document.querySelector("#homeButton").addEventListener("click", homeRobot);
@@ -2145,6 +2313,7 @@ async function init() {
   bindControls();
   applyTranslations();
   setActiveView("control");
+  await refreshBackendHealth({ showPrompt: false });
   await loadSimConfig();
   updateConnectionUi();
   updateDerivedState();
@@ -2153,7 +2322,6 @@ async function init() {
   loadRobotModel();
   startAnimation();
   addLog("WebUI 初始化完成");
-  refreshBackendHealth();
   setInterval(tickTelemetry, 1200);
 }
 
