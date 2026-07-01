@@ -113,6 +113,23 @@
               </div>
 
               <div class="command-section">
+                <h3 class="control-subhead" data-i18n="panel.controlMode">控制模式</h3>
+                <div class="control-mode-selector" id="controlModeSelector">
+                  <label class="mode-option">
+                    <input type="radio" name="controlMode" value="pos_vel" checked />
+                    <span data-i18n="mode.posVel">位置-速度模式</span>
+                  </label>
+                  <label class="mode-option">
+                    <input type="radio" name="controlMode" value="mit" />
+                    <span data-i18n="mode.mit">MIT 力矩模式</span>
+                  </label>
+                </div>
+                <div class="mit-params" id="mitParamsPanel" style="display:none">
+                  <div class="mit-params-grid" id="mitParamsGrid"></div>
+                </div>
+              </div>
+
+              <div class="command-section">
                 <h3 class="control-subhead" data-i18n="panel.ik">运动学逆解</h3>
                 <div class="cartesian-form" id="cartesianForm">
                   <div class="cartesian-row">
@@ -353,6 +370,20 @@
         <div class="modal-body">
           <p id="armDetectText" data-i18n="modal.detectedPrompt">后台扫描到电机反馈，是否连接真实机械臂？</p>
           <div class="detected-motors" id="detectedMotors"></div>
+          <div class="sudo-password-group" id="sudoPasswordGroup" hidden>
+            <label for="sudoPasswordInput" id="sudoPasswordLabel" data-i18n="modal.sudoPasswordLabel">sudo 密码 (用于配置 CAN 接口):</label>
+            <input
+              type="password"
+              id="sudoPasswordInput"
+              autocomplete="off"
+              spellcheck="false"
+              data-i18n-placeholder="modal.sudoPasswordPlaceholder"
+              placeholder="请输入系统密码"
+            />
+            <p id="sudoPasswordHint" class="sudo-password-hint" data-i18n="modal.sudoPasswordHint">
+              密码仅在本次会话内存中使用，不会保存或上传。
+            </p>
+          </div>
         </div>
 
         <div class="modal-actions">

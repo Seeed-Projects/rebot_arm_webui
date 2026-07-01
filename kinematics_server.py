@@ -177,6 +177,15 @@ GRIPPER_POSITION_TOLERANCE_RAD = _env_float("GRIPPER_POSITION_TOLERANCE_RAD", 0.
 GRIPPER_MAX_WAIT_S = _env_float("GRIPPER_MAX_WAIT_S", 1.8)
 
 
+def _can_link_state(iface: str) -> str | None:
+    """Return the SocketCAN link state (e.g. UP / DOWN / UNKNOWN) or None if missing."""
+    try:
+        text = Path(f"/sys/class/net/{iface}/operstate").read_text().strip().upper()
+        return text or None
+    except (FileNotFoundError, OSError):
+        return None
+
+
 def _scan_interfaces(profile: dict | None = None) -> tuple[bool, list[str], str]:
     profile = profile or _profile_for_type()
     system = platform.system().lower()
@@ -189,11 +198,131 @@ def _scan_interfaces(profile: dict | None = None) -> tuple[bool, list[str], str]
         configured = str(profile.get("channel") or profile["default_channel"])
         devices = sorted(path.name for path in Path("/sys/class/net").glob("can*"))
         if configured in devices:
-            return True, [configured], f"检测到 CAN 接口 {configured}"
+            state = _can_link_state(configured)
+            if state == "UP":
+                return True, [configured], f"检测到 CAN 接口 {configured} (UP)"
+            return True, [configured], f"检测到 CAN 接口 {configured} ({state or 'UNKNOWN'})"
         if devices:
-            return True, devices, f"检测到 CAN 接口: {', '.join(devices)}"
+            joined = ", ".join(f"{d}({_can_link_state(d) or 'UNKNOWN'})" for d in devices)
+            return True, devices, f"检测到 CAN 接口: {joined}"
         return False, [], "未检测到 can* SocketCAN 接口"
     return False, [], f"当前系统 {platform.system()} 暂不执行真实机械臂自动扫描"
+
+
+def _can_set_link_via_ip(iface: str, *args: str, timeout: float = 5.0, sudo_password: str | None = None) -> tuple[bool, str, str]:
+    """Run `ip link set <iface> ...` with the given args.
+
+    Returns (ok, detail, mode) where ``mode`` is one of:
+        - ``"direct"``   command ran without sudo
+        - ``"sudo"``     command ran via sudo (with or without password)
+        - ``"sudo_pw"``  sudo asked for a password (no password was supplied or it was wrong)
+        - ``"missing"``  the binary was not found on PATH
+    """
+    base = ["ip", "-details", "link", "set", iface, *args]
+    direct = subprocess.run(base, capture_output=True, text=True, timeout=timeout, check=False)
+    if direct.returncode == 0:
+        return True, " ".join(base), "direct"
+    detail = (direct.stderr or direct.stdout or "").strip()
+    if "Operation not permitted" not in detail and "permission" not in detail.lower():
+        return False, detail or f"命令返回 {direct.returncode}", "direct"
+
+    # Need sudo. If a password was supplied, use `sudo -S` (read from stdin).
+    if sudo_password:
+        proc = subprocess.run(
+            ["sudo", "-S", "-p", "", *base],
+            input=f"{sudo_password}\n",
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        if proc.returncode == 0:
+            return True, " ".join(["sudo", "-S", *base]), "sudo"
+        err = (proc.stderr or proc.stdout or "").strip()
+        if "incorrect password" in err.lower() or "Sorry, try again" in err:
+            return False, "sudo 密码错误", "sudo_pw"
+        return False, err or f"sudo 返回 {proc.returncode}", "sudo"
+
+    # Try non-interactive sudo to detect whether NOPASSWD is configured.
+    no_passwd = subprocess.run(["sudo", "-n", *base], capture_output=True, text=True, timeout=timeout, check=False)
+    if no_passwd.returncode == 0:
+        return True, " ".join(["sudo", "-n", *base]), "sudo"
+    np_detail = (no_passwd.stderr or no_passwd.stdout or "").strip()
+    if "a password is required" in np_detail or "password is required" in np_detail:
+        return False, "需要 sudo 密码", "sudo_pw"
+    return False, np_detail or f"sudo 返回 {no_passwd.returncode}", "sudo_pw"
+
+
+def _configure_can_interface(iface: str, bitrate: int, sudo_password: str | None = None) -> tuple[bool, str]:
+    """Configure a SocketCAN interface with the given bitrate and bring it UP.
+
+    Equivalent to:
+        sudo ip link set <iface> type can bitrate <bitrate> restart-ms 100
+        sudo ip link set <iface> up
+    """
+    if not iface or not Path(f"/sys/class/net/{iface}").exists():
+        return False, f"未发现 SocketCAN 接口: {iface}"
+    if bitrate <= 0:
+        return False, f"非法 CAN 比特率: {bitrate}"
+
+    # 先 down 一下，避免 bitrate 切换时的 "Device or resource busy"
+    _can_set_link_via_ip(iface, "down", sudo_password=sudo_password)
+
+    ok, detail, _mode = _can_set_link_via_ip(iface, "type", "can", "bitrate", str(bitrate), "restart-ms", "100", sudo_password=sudo_password)
+    if not ok:
+        return False, f"设置 {iface} 比特率失败: {detail}"
+
+    ok, detail, _mode = _can_set_link_via_ip(iface, "up", sudo_password=sudo_password)
+    if not ok:
+        return False, f"启用 {iface} 失败: {detail}"
+
+    state = _can_link_state(iface)
+    if state != "UP":
+        return False, f"{iface} 已配置但未处于 UP 状态 (operstate={state})"
+    return True, f"{iface} 已配置为 {bitrate} bps 并启动"
+
+
+def _ensure_can_interfaces_ready(bitrate: int | None = None, sudo_password: str | None = None) -> dict:
+    """Make sure every SocketCAN interface present on the host is UP at the given bitrate.
+
+    Returns a per-iface report suitable for logging or surfacing to the UI.
+    """
+    bitrate = int(bitrate or _env_int("REBOT_CAN_BITRATE", 1_000_000))
+    report: dict[str, dict] = {}
+    for entry in sorted(Path("/sys/class/net").glob("can*")):
+        iface = entry.name
+        current_state = _can_link_state(iface)
+        if current_state == "UP":
+            report[iface] = {"configured": False, "skipped": True, "state": current_state, "bitrate": bitrate}
+            continue
+        ok, detail = _configure_can_interface(iface, bitrate, sudo_password=sudo_password)
+        report[iface] = {
+            "configured": ok,
+            "skipped": False,
+            "state": _can_link_state(iface),
+            "bitrate": bitrate,
+            "detail": detail,
+        }
+    return report
+
+
+def _can_interface_ready(iface: str, bitrate: int | None = None, sudo_password: str | None = None) -> tuple[bool, str]:
+    """Ensure a specific SocketCAN interface is configured and UP."""
+    bitrate = int(bitrate or _env_int("REBOT_CAN_BITRATE", 1_000_000))
+    if _can_link_state(iface) == "UP":
+        return True, f"{iface} 已处于 UP 状态"
+    ok, detail = _configure_can_interface(iface, bitrate, sudo_password=sudo_password)
+    return ok, detail
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
 
 
 def _device_permission_status(devices: list[str]) -> tuple[bool, str | None]:
@@ -456,12 +585,17 @@ class RealArmBridge:
         self._motors: list[dict] = []
         self._permission_required = False
         self._permission_hint: str | None = None
+        self._sudo_password_required = False
         self._events: list[dict] = []
         self._monitoring = False
         self._enabled = False
         self._zero_offset_raw: np.ndarray | None = None
         self._zero_last_set_at = 0.0
         self._stop = threading.Event()
+        self._control_mode: str = "pos_vel"
+        self._mit_kp: np.ndarray | None = None
+        self._mit_kd: np.ndarray | None = None
+        self._mit_tau: np.ndarray | None = None
         self._thread = threading.Thread(target=self._scan_loop, name="real-arm-scan", daemon=True)
         self._thread.start()
 
@@ -593,6 +727,59 @@ class RealArmBridge:
             group.mode_pos_vel(vlim=vlim)
         else:
             group.mode_pos_vel(vlim=vlim, stabilize_delay=stabilize_delay)
+
+    def _load_mit_params_locked(self) -> None:
+        """从运行时配置中加载 MIT 模式默认参数（Kp/Kd）。"""
+        arm = self._ensure_arm_locked()
+        if self._is_rs_locked():
+            group = arm.arm
+            self._mit_kp = np.array([j.kp for j in group._jcfgs], dtype=np.float64)
+            self._mit_kd = np.array([j.kd for j in group._jcfgs], dtype=np.float64)
+            self._mit_tau = np.zeros(self._mit_kp.shape, dtype=np.float64)
+        else:
+            self._mit_kp = np.array([j.kp for j in arm._jcfgs], dtype=np.float64)
+            self._mit_kd = np.array([j.kd for j in arm._jcfgs], dtype=np.float64)
+            self._mit_tau = np.zeros(self._mit_kp.shape, dtype=np.float64)
+
+    def _send_mit_locked(self, q: np.ndarray) -> None:
+        group = self._arm_group_locked()
+        kp = self._mit_kp if self._mit_kp is not None else None
+        kd = self._mit_kd if self._mit_kd is not None else None
+        tau = self._mit_tau if self._mit_tau is not None else None
+        if self._is_rs_locked():
+            group.send_mit(q, vel=None, kp=kp, kd=kd, tau=tau)
+        else:
+            group.mit(q, vel=None, kp=kp, kd=kd, tau=tau)
+
+    def set_control_mode(self, mode: str, kp=None, kd=None, tau=None) -> dict:
+        """切换控制模式（pos_vel / mit），并可选地更新 MIT 参数。"""
+        with self._lock:
+            if mode not in {"pos_vel", "mit"}:
+                return {"ok": False, "message": f"不支持的控制模式: {mode}"}
+            self._control_mode = mode
+            msg = f"切换到 {mode} 模式"
+            if mode == "mit" and self._connected and self._arm is not None:
+                self._load_mit_params_locked()
+                if kp is not None:
+                    self._mit_kp = np.asarray(kp, dtype=np.float64).reshape(-1)
+                if kd is not None:
+                    self._mit_kd = np.asarray(kd, dtype=np.float64).reshape(-1)
+                if tau is not None:
+                    self._mit_tau = np.asarray(tau, dtype=np.float64).reshape(-1)
+                msg += f" (kp={self._mit_kp.tolist()}, kd={self._mit_kd.tolist()})"
+                group = self._arm_group_locked()
+                if self._is_rs_locked():
+                    group.mode_mit(kp=self._mit_kp, kd=self._mit_kd)
+                else:
+                    group.mode_mit(kp=self._mit_kp, kd=self._mit_kd, stabilize_delay=0.1)
+            elif mode == "pos_vel" and self._connected and self._arm is not None:
+                self._mode_pos_vel_locked()
+            self._log_locked("control_mode", msg)
+            return {
+                **self.health(),
+                "ok": True,
+                "message": msg,
+            }
 
     def _send_pos_vel_locked(self, q: np.ndarray, vlim=None) -> None:
         group = self._arm_group_locked()
@@ -856,17 +1043,56 @@ class RealArmBridge:
         runtime_cfg.write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
         return runtime_cfg
 
-    def _scan_once_locked(self) -> None:
+    def _scan_once_locked(self, sudo_password: str | None = None) -> None:
         profile = {**self._active_profile, "channel": self._active_channel}
         self._interface_present, self._interfaces, interface_message = _scan_interfaces(profile)
         self._set_active_channel_locked(self._interfaces[0] if self._interfaces else ARM_CHANNELS[self._active_arm_type])
+
+        can_hint: str | None = None
+        needs_sudo_password = False
+        if self._active_profile["channel_kind"] == "can" and self._interfaces:
+            prepared: list[str] = []
+            bitrate = _env_int("REBOT_CAN_BITRATE", 1_000_000)
+            failed: list[str] = []
+            for iface in self._interfaces:
+                ok, detail = _can_interface_ready(iface, bitrate=bitrate, sudo_password=sudo_password)
+                if ok:
+                    prepared.append(iface)
+                elif "需要 sudo 密码" in detail:
+                    needs_sudo_password = True
+                    failed.append(f"{iface}: 需要 sudo 密码")
+                else:
+                    failed.append(f"{iface}: {detail}")
+            if failed:
+                if needs_sudo_password:
+                    can_hint = (
+                        "CAN 接口需要 sudo 权限才能配置，请在弹窗中输入 sudo 密码。"
+                        f" 失败详情: {'; '.join(failed)}"
+                    )
+                else:
+                    can_hint = "无法自动配置 CAN 接口，请手动执行: " + "; ".join(
+                        f"sudo ip link set {i} type can bitrate {bitrate} restart-ms 100 && sudo ip link set {i} up"
+                        for i in self._interfaces
+                    ) + f" ({'; '.join(failed)})"
+                self._log_locked("can", can_hint, interfaces=self._interfaces)
+            if prepared:
+                self._interfaces = prepared
+                interface_message = f"检测到 CAN 接口: {', '.join(prepared)}"
+            elif not any(_can_link_state(i) == "UP" for i in self._interfaces):
+                self._interfaces = []
+                self._interface_present = False
+            else:
+                # 部分接口已 UP，保留扫描到的接口列表以便 healthz 显示
+                self._interfaces = [i for i in self._interfaces if _can_link_state(i) == "UP"]
+
         if not self._interface_present:
             self._close_arm_locked()
             self._detected = False
             self._motors = []
-            self._permission_required = False
-            self._permission_hint = None
-            self._last_error = interface_message
+            self._permission_required = bool(can_hint) and not needs_sudo_password
+            self._permission_hint = can_hint
+            self._sudo_password_required = needs_sudo_password
+            self._last_error = self._permission_hint
             self._last_scan_at = time.time()
             self._log_locked("scan", interface_message)
             return
@@ -874,7 +1100,7 @@ class RealArmBridge:
         has_permission, permission_hint = (
             _device_permission_status(self._interfaces)
             if self._active_profile["channel_kind"] == "serial"
-            else (True, None)
+            else (not needs_sudo_password and not (can_hint and not needs_sudo_password), can_hint)
         )
         self._permission_required = not has_permission
         self._permission_hint = permission_hint
@@ -882,9 +1108,10 @@ class RealArmBridge:
             self._close_arm_locked()
             self._detected = False
             self._motors = []
+            self._sudo_password_required = needs_sudo_password
             self._last_error = permission_hint
             self._last_scan_at = time.time()
-            self._log_locked("permission", permission_hint or "串口权限不足", interfaces=self._interfaces)
+            self._log_locked("permission", permission_hint or "CAN/串口权限不足", interfaces=self._interfaces)
             return
 
         arm = self._ensure_arm_locked()
@@ -894,6 +1121,7 @@ class RealArmBridge:
         self._motors = motors
         self._permission_required = False
         self._permission_hint = None
+        self._sudo_password_required = False
         self._last_error = None if detected else "未读取到电机反馈"
         self._last_scan_at = time.time()
         self._log_locked(
@@ -1032,6 +1260,10 @@ class RealArmBridge:
                 "zero_last_set_at": self._zero_last_set_at or None,
                 "permission_required": self._permission_required,
                 "permission_hint": self._permission_hint,
+                "sudo_password_required": self._sudo_password_required,
+                "control_mode": self._control_mode,
+                "mit_kp": self._mit_kp.tolist() if self._mit_kp is not None else None,
+                "mit_kd": self._mit_kd.tolist() if self._mit_kd is not None else None,
                 "error": self._last_error,
             }
 
@@ -1039,11 +1271,11 @@ class RealArmBridge:
         with self._lock:
             return {"ok": True, "events": self._events}
 
-    def connect(self, confirmed: bool = False, arm_type: str | None = None) -> dict:
+    def connect(self, confirmed: bool = False, arm_type: str | None = None, sudo_password: str | None = None) -> dict:
         with self._lock:
             self._set_arm_type_locked(arm_type)
             try:
-                self._scan_once_locked()
+                self._scan_once_locked(sudo_password=sudo_password)
             except Exception as exc:
                 self._detected = False
                 self._motors = []
@@ -1054,7 +1286,14 @@ class RealArmBridge:
                 self._last_scan_at = time.time()
                 return {**self.health(), "ok": False, "message": self._permission_hint or "无法连接真实机械臂"}
             if self._permission_required:
-                return {**self.health(), "ok": False, "message": self._permission_hint or "串口权限不足"}
+                payload = {**self.health(), "ok": False, "message": self._permission_hint or "权限不足"}
+                if self._sudo_password_required:
+                    payload["needs_sudo_password"] = True
+                return payload
+            if self._sudo_password_required:
+                payload = {**self.health(), "ok": False, "message": self._permission_hint or "CAN 接口需要 sudo 权限"}
+                payload["needs_sudo_password"] = True
+                return payload
             
             # RS 电机必须在使能后才能返回反馈，所以只要接口存在就可以连接
             # DM 电机可以在未使能时返回反馈，需要检查反馈
@@ -1067,7 +1306,7 @@ class RealArmBridge:
                 return {**self.health(), "ok": True, "requires_confirmation": True}
             arm = self._ensure_arm_locked()
             arm.connect()
-            
+            self._load_mit_params_locked()
             # RS 电机使能后再读取反馈确认
             self._enable_arm_locked(retries=5, poll_interval=0.05, mode="pos_vel")
             self._enabled = True
@@ -1462,47 +1701,90 @@ class RealArmBridge:
                 duration_s=duration,
                 steps=steps,
             )
-            self._enable_arm_locked(retries=5, poll_interval=0.05, mode="pos_vel", vlim=slow_vlim)
-            self._enabled = True
-            self._mode_pos_vel_locked(vlim=slow_vlim, stabilize_delay=0.1)
-
             target_ref = {"q": current.copy()}
+            control_mode = self._control_mode
 
-            def pos_vel_controller(ref, _dt):
+            if control_mode == "mit":
+                self._enable_arm_locked(retries=5, poll_interval=0.05, mode="mit")
+                self._enabled = True
                 if self._is_rs_locked():
-                    ref.arm.send_pos_vel(target_ref["q"], vlim=slow_vlim)
+                    self._ensure_arm_locked().arm.mode_mit(
+                        kp=self._mit_kp, kd=self._mit_kd
+                    )
                 else:
-                    ref.pos_vel(target_ref["q"], vlim=slow_vlim)
+                    self._ensure_arm_locked().mode_mit(
+                        kp=self._mit_kp, kd=self._mit_kd, stabilize_delay=0.1
+                    )
 
-            self._arm.start_control_loop(pos_vel_controller, rate=50.0)
-            try:
-                for index in range(1, steps + 1):
-                    ratio = index / steps
-                    blend = ratio * ratio * (3.0 - 2.0 * ratio)
-                    target_ref["q"] = current + delta * blend
-                    time.sleep(duration / steps)
-                target_ref["q"] = target.copy()
-                time.sleep(0.5)
-            finally:
-                if self._arm.control_loop_active:
-                    self._arm.stop_control_loop()
-                self._monitoring = False
+                def mit_controller(ref, _dt):
+                    if self._is_rs_locked():
+                        ref.arm.send_mit(target_ref["q"])
+                    else:
+                        ref.mit(target_ref["q"])
 
-            result = self.state()
-            result.update(
-                {
+                self._arm.start_control_loop(mit_controller, rate=100.0)
+                try:
+                    for index in range(1, steps + 1):
+                        ratio = index / steps
+                        blend = ratio * ratio * (3.0 - 2.0 * ratio)
+                        target_ref["q"] = current + delta * blend
+                        time.sleep(duration / steps)
+                    target_ref["q"] = target.copy()
+                    time.sleep(0.5)
+                finally:
+                    if self._arm.control_loop_active:
+                        self._arm.stop_control_loop()
+                    self._monitoring = False
+                result = self.state()
+                result.update({
                     "ok": True,
-                    "message": "目标位置已低速执行",
+                    "message": "目标位置已 MIT 模式执行",
                     "command": {
-                        "type": "joint_pos_vel_trajectory",
+                        "type": "joint_mit_trajectory",
+                        "control_mode": "mit",
                         "target_joints_rad": target.tolist(),
-                        "target_raw_joints_rad": target.tolist(),
                         "max_speed_rad_s": max_speed,
                         "duration_s": duration,
                         "steps": steps,
                     },
-                }
-            )
+                })
+            else:
+                self._enable_arm_locked(retries=5, poll_interval=0.05, mode="pos_vel", vlim=slow_vlim)
+                self._enabled = True
+                self._mode_pos_vel_locked(vlim=slow_vlim, stabilize_delay=0.1)
+
+                def pos_vel_controller(ref, _dt):
+                    if self._is_rs_locked():
+                        ref.arm.send_pos_vel(target_ref["q"], vlim=slow_vlim)
+                    else:
+                        ref.pos_vel(target_ref["q"], vlim=slow_vlim)
+
+                self._arm.start_control_loop(pos_vel_controller, rate=50.0)
+                try:
+                    for index in range(1, steps + 1):
+                        ratio = index / steps
+                        blend = ratio * ratio * (3.0 - 2.0 * ratio)
+                        target_ref["q"] = current + delta * blend
+                        time.sleep(duration / steps)
+                    target_ref["q"] = target.copy()
+                    time.sleep(0.5)
+                finally:
+                    if self._arm.control_loop_active:
+                        self._arm.stop_control_loop()
+                    self._monitoring = False
+                result = self.state()
+                result.update({
+                    "ok": True,
+                    "message": "目标位置已低速执行",
+                    "command": {
+                        "type": "joint_pos_vel_trajectory",
+                        "control_mode": "pos_vel",
+                        "target_joints_rad": target.tolist(),
+                        "max_speed_rad_s": max_speed,
+                        "duration_s": duration,
+                        "steps": steps,
+                    },
+                })
             self._log_locked("move", "目标位置执行完成", command=result["command"])
             return result
 
@@ -1627,8 +1909,50 @@ class Handler(SimpleHTTPRequestHandler):
                 _json_response(self, REAL_ARM.set_arm_type(arm_type))
                 return
 
+            if path == "/can/prepare":
+                bitrate = int(payload.get("bitrate") or _env_int("REBOT_CAN_BITRATE", 1_000_000))
+                sudo_password = payload.get("sudo_password")
+                report = _ensure_can_interfaces_ready(bitrate=bitrate, sudo_password=sudo_password)
+                failures = [
+                    (iface, entry.get("detail", ""))
+                    for iface, entry in report.items()
+                    if not (entry.get("configured") or entry.get("skipped"))
+                ]
+                needs_password = any("需要 sudo 密码" in detail for _, detail in failures)
+                wrong_password = any("sudo 密码错误" in detail for _, detail in failures)
+                ok_all = not failures
+                result = {
+                    "ok": ok_all,
+                    "bitrate": bitrate,
+                    "interfaces": report,
+                    "message": (
+                        "所有 CAN 接口已就绪"
+                        if not failures
+                        else "部分 CAN 接口配置失败: " + "; ".join(f"{i}: {d}" for i, d in failures)
+                    ),
+                    "needs_sudo_password": needs_password,
+                    "wrong_sudo_password": wrong_password,
+                    "manual_hint": (
+                        None
+                        if not failures
+                        else "请手动执行: " + "; ".join(
+                            f"sudo ip link set {i} type can bitrate {bitrate} restart-ms 100 && sudo ip link set {i} up"
+                            for i in report.keys()
+                        )
+                    ),
+                }
+                _json_response(self, result)
+                return
+
             if path == "/connect":
-                _json_response(self, REAL_ARM.connect(confirmed=bool(payload.get("confirm")), arm_type=arm_type))
+                _json_response(
+                    self,
+                    REAL_ARM.connect(
+                        confirmed=bool(payload.get("confirm")),
+                        arm_type=arm_type,
+                        sudo_password=payload.get("sudo_password"),
+                    ),
+                )
                 return
 
             if path == "/disconnect":
@@ -1645,6 +1969,17 @@ class Handler(SimpleHTTPRequestHandler):
 
             if path == "/gripper":
                 _json_response(self, REAL_ARM.command_gripper(str(payload.get("action") or "")))
+                return
+
+            if path == "/control/mode":
+                mode = payload.get("mode", "pos_vel")
+                kp = payload.get("kp")
+                kd = payload.get("kd")
+                tau = payload.get("tau")
+                if mode not in {"pos_vel", "mit"}:
+                    raise ValueError(f"unsupported control mode: {mode}; supported: pos_vel, mit")
+                result = REAL_ARM.set_control_mode(mode, kp=kp, kd=kd, tau=tau)
+                _json_response(self, result)
                 return
 
             if path == "/move/joints":
@@ -1677,6 +2012,15 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", content_type or mimetypes.guess_type(str(path))[0] or "application/octet-stream")
         self.send_header("Content-Length", str(len(body)))
+        # index.html 必须 no-cache，避免浏览器复用指向旧 hash bundle 的 HTML
+        # 带 hash 的产物（dist/assets/*）做一年强缓存
+        name = path.name
+        if name == "index.html":
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
+        elif path.parts.__contains__("assets"):
+            self.send_header("Cache-Control", "public, max-age=31536000, immutable")
         self.end_headers()
         self.wfile.write(body)
 
