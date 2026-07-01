@@ -68,12 +68,12 @@ const dmJoints = [
 
 // RS 版本关节限位 (弧度转角度: joint2/joint3 是 0~180度，其他关节限位根据 URDF)
 const rsJoints = [
-  { name: "joint1", urdfName: "joint1", motorId: "0x01", feedbackId: "0xFD", model: "rs-06", min: -160, max: 160, angle: 0 },
-  { name: "joint2", urdfName: "joint2", motorId: "0x02", feedbackId: "0xFD", model: "rs-06", min: 0, max: 180, angle: 0 },
-  { name: "joint3", urdfName: "joint3", motorId: "0x03", feedbackId: "0xFD", model: "rs-06", min: 0, max: 180, angle: 0 },
-  { name: "joint4", urdfName: "joint4", motorId: "0x04", feedbackId: "0xFD", model: "rs-00", min: -90, max: 90, angle: 0 },
-  { name: "joint5", urdfName: "joint5", motorId: "0x05", feedbackId: "0xFD", model: "rs-00", min: -90, max: 90, angle: 0 },
-  { name: "joint6", urdfName: "joint6", motorId: "0x06", feedbackId: "0xFD", model: "rs-00", min: -180, max: 180, angle: 0 },
+  { name: "joint1", urdfName: "joint1", motorId: "0x01", feedbackId: "0xFD", model: "rs-06", min: -160, max: 160, angle: 0, mitKp: 50,  mitKd: 3  },
+  { name: "joint2", urdfName: "joint2", motorId: "0x02", feedbackId: "0xFD", model: "rs-06", min: 0,   max: 180, angle: 0, mitKp: 150, mitKd: 10 },
+  { name: "joint3", urdfName: "joint3", motorId: "0x03", feedbackId: "0xFD", model: "rs-06", min: 0,   max: 180, angle: 0, mitKp: 150, mitKd: 10 },
+  { name: "joint4", urdfName: "joint4", motorId: "0x04", feedbackId: "0xFD", model: "rs-00", min: -90,  max: 90,  angle: 0, mitKp: 50,  mitKd: 5  },
+  { name: "joint5", urdfName: "joint5", motorId: "0x05", feedbackId: "0xFD", model: "rs-00", min: -90,  max: 90,  angle: 0, mitKp: 50,  mitKd: 4  },
+  { name: "joint6", urdfName: "joint6", motorId: "0x06", feedbackId: "0xFD", model: "rs-00", min: -180, max: 180, angle: 0, mitKp: 50,  mitKd: 4  },
 ];
 
 // 动态关节配置，根据 arm type 选择
@@ -90,10 +90,14 @@ const state = {
   detectedMotors: [],
   permissionRequired: false,
   permissionHint: "",
+  sudoPasswordRequired: false,
   armPromptDismissed: false,
   armModalMode: "connect",
   apiMode: "mock",
   armType: "dm",
+  controlMode: "pos_vel",
+  mitKp: null,
+  mitKd: null,
   armProfiles: [
     { type: "dm", label: "Damiao", channel_kind: "serial" },
     { type: "rs", label: "RS", channel_kind: "can" },
@@ -279,6 +283,11 @@ const translations = {
       detectedAsk: "已读取到 {{count}} 个电机反馈，是否连接真实机械臂？",
       detectedWaiting: "已检测到 /dev/ttyACM*，正在等待机械臂反馈。请确认机械臂供电和通信线。",
       permissionHintDefault: "串口权限不足，请执行 sudo chmod 666 /dev/ttyACM* 后重试",
+      sudoNeeded: "配置 CAN 接口需要 sudo 权限，请在下方输入系统密码后再次点击连接。",
+      sudoWrongPassword: "sudo 密码错误，请重新输入。",
+      sudoPasswordLabel: "sudo 密码（用于配置 CAN 接口）:",
+      sudoPasswordPlaceholder: "请输入系统密码",
+      sudoPasswordHint: "密码仅在本次会话内存中使用，不会保存或上传。",
       motorFallback: "motor",
     },
     overlay: {
@@ -309,7 +318,18 @@ const translations = {
     },
     mode: {
       positionControl: "位置控制",
+      posVel: "位置-速度模式",
+      mit: "MIT 力矩模式",
       estopLocked: "急停锁定",
+    },
+    panel: {
+      controlMode: "控制模式",
+      jointControl: "关节控制",
+      ik: "运动学逆解",
+      mitParams: "MIT 参数",
+      mitKp: "Kp (刚度)",
+      mitKd: "Kd (阻尼)",
+      mitTau: "tau (前馈力矩)",
     },
   },
   "en-US": {
@@ -462,6 +482,11 @@ const translations = {
       detectedAsk: "Received feedback from {{count}} motors. Connect the real arm?",
       detectedWaiting: "Detected /dev/ttyACM* and waiting for motor feedback. Check arm power and communication cable.",
       permissionHintDefault: "Serial permission is missing. Run sudo chmod 666 /dev/ttyACM* and try again.",
+      sudoNeeded: "sudo privileges are required to configure CAN interfaces. Enter your system password below and click Connect again.",
+      sudoWrongPassword: "Incorrect sudo password. Please try again.",
+      sudoPasswordLabel: "sudo password (used to configure CAN interfaces):",
+      sudoPasswordPlaceholder: "Enter system password",
+      sudoPasswordHint: "The password is only used in memory for this session and is never stored or uploaded.",
       motorFallback: "motor",
     },
     overlay: {
@@ -492,7 +517,18 @@ const translations = {
     },
     mode: {
       positionControl: "Position Control",
+      posVel: "Position-Velocity Mode",
+      mit: "MIT Torque Mode",
       estopLocked: "E-stop Locked",
+    },
+    panel: {
+      controlMode: "Control Mode",
+      jointControl: "Joint Control",
+      ik: "Inverse Kinematics",
+      mitParams: "MIT Parameters",
+      mitKp: "Kp (Stiffness)",
+      mitKd: "Kd (Damping)",
+      mitTau: "tau (Feedforward Torque)",
     },
   },
 };
@@ -573,6 +609,9 @@ const els = {
   connectionStatus: document.querySelector("#connectionStatus"),
   sidebarModeBadge: document.querySelector("#sidebarModeBadge"),
   jointList: document.querySelector("#jointList"),
+  controlModeSelector: document.querySelector("#controlModeSelector"),
+  mitParamsPanel: document.querySelector("#mitParamsPanel"),
+  mitParamsGrid: document.querySelector("#mitParamsGrid"),
   backendLogList: document.querySelector("#backendLogList"),
   diagnosticsStatus: document.querySelector("#diagnosticsStatus"),
   diagnosticsSummary: document.querySelector("#diagnosticsSummary"),
@@ -608,6 +647,8 @@ const els = {
   armDetectCancel: document.querySelector("#armDetectCancel"),
   serialPermissionButton: document.querySelector("#serialPermissionButton"),
   armDetectConfirm: document.querySelector("#armDetectConfirm"),
+  sudoPasswordGroup: document.querySelector("#sudoPasswordGroup"),
+  sudoPasswordInput: document.querySelector("#sudoPasswordInput"),
 };
 
 function setBadgeVariant(element, variant) {
@@ -680,6 +721,9 @@ function applyStaticTranslations() {
   });
   document.querySelectorAll("[data-i18n-aria-label]").forEach((node) => {
     node.setAttribute("aria-label", t(node.dataset.i18nAriaLabel));
+  });
+  document.querySelectorAll("[data-i18n-placeholder]").forEach((node) => {
+    node.setAttribute("placeholder", t(node.dataset.i18nPlaceholder));
   });
   els.languageSelect.value = state.locale;
   renderArmTypeOptions();
@@ -1271,24 +1315,34 @@ function normalizeRobot(robot) {
 }
 
 function updateRobotJoints() {
-  if (!state.robot) return;
+  if (!state.robot) {
+    // 兜底：如果 joint 数组有数据但 3D 视图未加载，尝试重新加载 URDF 模型
+    if (!updateRobotJoints.reloading && joints?.length && state.simConfig?.urdfUrl) {
+      updateRobotJoints.reloading = true;
+      loadRobotModel();
+      setTimeout(() => { updateRobotJoints.reloading = false; }, 500);
+    }
+    // 即使没有 robot 也继续走完后面的逻辑，让关节值在重新加载后能立即应用
+  }
 
   joints.forEach((joint) => {
-    if (state.robot.joints[joint.urdfName]) {
+    if (state.robot?.joints?.[joint.urdfName]) {
       state.robot.setJointValue(joint.urdfName, degToRad(joint.angle));
     }
   });
 
-  state.robot.updateMatrixWorld(true);
-  const endEffectorLink = state.simConfig.endEffectorLink ?? "end_link";
-  const endLink = state.robot.links?.[endEffectorLink];
-  if (endLink) {
-    getTcpWorldPosition(endLink, tcpMarker.position);
-  }
+  if (state.robot) {
+    state.robot.updateMatrixWorld(true);
+    const endEffectorLink = state.simConfig.endEffectorLink ?? "end_link";
+    const endLink = state.robot.links?.[endEffectorLink];
+    if (endLink) {
+      getTcpWorldPosition(endLink, tcpMarker.position);
+    }
 
-  const pose = getUrdfEndEffectorPose();
-  if (pose) {
-    state.lastPose = pose;
+    const pose = getUrdfEndEffectorPose();
+    if (pose) {
+      state.lastPose = pose;
+    }
   }
 }
 
@@ -1509,6 +1563,7 @@ function applyArmDetection(payload) {
   state.detectedMotors = Array.isArray(payload?.detected_motors) ? payload.detected_motors : [];
   state.permissionRequired = Boolean(payload?.permission_required);
   state.permissionHint = payload?.permission_hint || "";
+  state.sudoPasswordRequired = Boolean(payload?.sudo_password_required);
   const interfaceDetected = !hadInterface && state.interfacePresent;
   const armDetected = !wasDetected && state.armDetected;
 
@@ -1546,6 +1601,21 @@ function applyRealtimePayload(payload, { robotState = false } = {}) {
   renderArmTypeOptions();
   state.connected = Boolean(payload.connected);
   state.enabled = "enabled" in payload ? Boolean(payload.enabled) : state.connected;
+  if (payload.control_mode) {
+    state.controlMode = payload.control_mode;
+    const radio = els.controlModeSelector?.querySelector(`input[value="${payload.control_mode}"]`);
+    if (radio) radio.checked = true;
+    if (els.mitParamsPanel) {
+      els.mitParamsPanel.style.display = payload.control_mode === "mit" ? "block" : "none";
+    }
+    if (payload.control_mode === "mit") {
+      state.mitKp = Array.isArray(payload.mit_kp) ? payload.mit_kp : state.mitKp;
+      state.mitKd = Array.isArray(payload.mit_kd) ? payload.mit_kd : state.mitKd;
+      if (els.mitParamsGrid?.children.length) {
+        syncMitSliderFromState();
+      }
+    }
+  }
   if (Array.isArray(payload.joints_rad)) {
     setJointRadians(payload.joints_rad);
   }
@@ -1568,6 +1638,7 @@ function showArmDetectModal(mode = state.armModalMode) {
   els.armDetectConfirm.hidden = isMissing;
   els.serialPermissionButton.hidden = true;
   els.armDetectConfirm.disabled = false;
+  if (els.sudoPasswordGroup) els.sudoPasswordGroup.hidden = !state.sudoPasswordRequired;
 
   if (isMissing) {
     els.armDetectText.textContent = t("modal.noArmPrompt");
@@ -1594,6 +1665,9 @@ function showArmDetectModal(mode = state.armModalMode) {
         <span>sudo chmod 666 /dev/ttyACM*</span>
       </span>
     `;
+  } else if (state.sudoPasswordRequired) {
+    els.armDetectText.textContent = t("modal.sudoNeeded");
+    els.detectedMotors.innerHTML = "";
   } else {
     els.armDetectText.textContent = count > 0
       ? t("modal.detectedAsk", { count })
@@ -1615,6 +1689,7 @@ function showArmDetectModal(mode = state.armModalMode) {
 function hideArmDetectModal() {
   if (els.armDetectModal) els.armDetectModal.hidden = true;
   if (els.serialPermissionButton) els.serialPermissionButton.hidden = true;
+  if (els.sudoPasswordInput) els.sudoPasswordInput.value = "";
   if (els.armDetectConfirm) {
     els.armDetectConfirm.hidden = false;
     els.armDetectConfirm.disabled = false;
@@ -2029,9 +2104,11 @@ async function handleConnectButton() {
   addLog(t("modal.noArmPrompt"));
 }
 
-async function connectRobot({ confirmed = false } = {}) {
+async function connectRobot({ confirmed = false, sudoPassword = null } = {}) {
+  const body = { confirm: confirmed };
+  if (sudoPassword) body.sudo_password = sudoPassword;
   try {
-    const result = await apiJson("/connect", { method: "POST", body: { confirm: confirmed }, timeoutMs: 8000 });
+    const result = await apiJson("/connect", { method: "POST", body, timeoutMs: 8000 });
     applyRealtimePayload(result);
     if (result.requires_confirmation) {
       state.armPromptDismissed = false;
@@ -2219,9 +2296,49 @@ function bindControls() {
     hideArmDetectModal();
     addLog("已暂不连接真实机械臂");
   });
-  els.armDetectConfirm.addEventListener("click", () => {
+  els.armDetectConfirm.addEventListener("click", async () => {
+    const sudoPassword = state.sudoPasswordRequired
+      ? (els.sudoPasswordInput?.value || "").trim()
+      : null;
+    if (state.sudoPasswordRequired && !sudoPassword) {
+      setSolverStatus(t("modal.sudoNeeded"), true);
+      els.sudoPasswordInput?.focus();
+      return;
+    }
+    if (state.sudoPasswordRequired && sudoPassword) {
+      // 先调用 /can/prepare 验证密码并配置所有 CAN 接口
+      // 配置成功后再继续走 /connect，避免密码错误时静默失败
+      els.armDetectConfirm.disabled = true;
+      try {
+        const prepareResult = await apiJson("/can/prepare", {
+          method: "POST",
+          body: { sudo_password: sudoPassword },
+          timeoutMs: 8000,
+        });
+        if (prepareResult.wrong_sudo_password) {
+          setSolverStatus(t("modal.sudoWrongPassword") || "sudo 密码错误", true);
+          addLog("sudo 密码错误，请重试");
+          els.sudoPasswordInput.value = "";
+          els.sudoPasswordInput.focus();
+          els.armDetectConfirm.disabled = false;
+          return;
+        }
+        if (!prepareResult.ok) {
+          setSolverStatus(prepareResult.message || "CAN 接口配置失败", true);
+          addLog(prepareResult.message || "CAN 接口配置失败");
+          els.armDetectConfirm.disabled = false;
+          return;
+        }
+        addLog(`CAN 接口已配置: bitrate=${prepareResult.bitrate}`);
+      } catch (error) {
+        setSolverStatus(t("modal.sudoNeeded"), true);
+        addLog("CAN 接口准备失败: " + (error?.message || error));
+        els.armDetectConfirm.disabled = false;
+        return;
+      }
+    }
     hideArmDetectModal();
-    connectRobot({ confirmed: true });
+    connectRobot({ confirmed: true, sudoPassword });
   });
   els.serialPermissionButton.addEventListener("click", configureSerialPermission);
 
@@ -2307,9 +2424,170 @@ function stopAnimation() {
   state.animationFrameId = null;
 }
 
+// ── 控制模式选择器 & MIT 参数 UI ───────────────────────────────────
+
+function initControlModeUI() {
+  if (!els.controlModeSelector) return;
+
+  // 绑定 radio change 事件
+  els.controlModeSelector.querySelectorAll('input[name="controlMode"]').forEach((radio) => {
+    radio.addEventListener("change", async () => {
+      const mode = radio.value;
+      state.controlMode = mode;
+
+      // 显示/隐藏 MIT 参数面板
+      if (els.mitParamsPanel) {
+        els.mitParamsPanel.style.display = mode === "mit" ? "block" : "none";
+      }
+
+      // 切换到 MIT 模式时，渲染 Kp/Kd 滑块
+      if (mode === "mit") {
+        renderMitParamsPanel();
+      }
+
+      // 发到后端（未连接时也发，后端会记录状态）
+      if (state.backendOnline) {
+        try {
+          const body = { mode };
+          if (mode === "mit") {
+            body.kp = getMitKp();
+            body.kd = getMitKd();
+          }
+          await apiJson("/control/mode", {
+            method: "POST",
+            body,
+            timeoutMs: 5000,
+          });
+        } catch (e) {
+          addLog("控制模式切换失败: " + (e?.message || e));
+        }
+      }
+
+      // 更新发送按钮文字
+      updateConnectionUi();
+    });
+  });
+}
+
+function renderMitParamsPanel() {
+  if (!els.mitParamsGrid) return;
+  const n = joints.length;
+  const kp = state.mitKp ?? [];
+  const kd = state.mitKd ?? [];
+
+  els.mitParamsGrid.innerHTML = "";
+
+  for (let i = 0; i < n; i++) {
+    const joint = joints[i];
+    const kpVal = kp[i] ?? joint.mitKp ?? 50;
+    const kdVal = kd[i] ?? joint.mitKd ?? 5;
+
+    const col = document.createElement("div");
+    col.className = "mit-param-group";
+
+    const title = document.createElement("div");
+    title.className = "mit-param-label";
+    title.textContent = joint.name;
+    col.appendChild(title);
+
+    const kpRow = document.createElement("div");
+    kpRow.className = "mit-param-row";
+    kpRow.innerHTML = `
+      <label>${t("panel.mitKp")}
+        <span id="mitKpVal${i}">${kpVal.toFixed(0)}</span>
+      </label>
+      <input type="range" id="mitKp${i}" min="0" max="200" step="1" value="${kpVal}" />
+    `;
+    const kpInput = kpRow.querySelector(`#mitKp${i}`);
+    const kpValSpan = kpRow.querySelector(`#mitKpVal${i}`);
+    kpInput.addEventListener("input", () => {
+      const v = Number(kpInput.value);
+      kpValSpan.textContent = v;
+      state.mitKp = state.mitKp || getMitKp();
+      state.mitKp[i] = v;
+      syncMitParamsToBackend();
+    });
+    col.appendChild(kpRow);
+
+    const kdRow = document.createElement("div");
+    kdRow.className = "mit-param-row";
+    kdRow.innerHTML = `
+      <label>${t("panel.mitKd")}
+        <span id="mitKdVal${i}">${kdVal.toFixed(1)}</span>
+      </label>
+      <input type="range" id="mitKd${i}" min="0" max="20" step="0.5" value="${kdVal}" />
+    `;
+    const kdInput = kdRow.querySelector(`#mitKd${i}`);
+    const kdValSpan = kdRow.querySelector(`#mitKdVal${i}`);
+    kdInput.addEventListener("input", () => {
+      const v = Number(kdInput.value);
+      kdValSpan.textContent = v.toFixed(1);
+      state.mitKd = state.mitKd || getMitKd();
+      state.mitKd[i] = v;
+      syncMitParamsToBackend();
+    });
+    col.appendChild(kdRow);
+
+    els.mitParamsGrid.appendChild(col);
+  }
+}
+
+function syncMitSliderFromState() {
+  const kp = state.mitKp ?? [];
+  const kd = state.mitKd ?? [];
+  for (let i = 0; i < joints.length; i++) {
+    const kpInput = document.getElementById(`mitKp${i}`);
+    const kpVal = document.getElementById(`mitKpVal${i}`);
+    if (kpInput) {
+      kpInput.value = kp[i] ?? 50;
+      if (kpVal) kpVal.textContent = kpInput.value;
+    }
+    const kdInput = document.getElementById(`mitKd${i}`);
+    const kdVal = document.getElementById(`mitKdVal${i}`);
+    if (kdInput) {
+      kdInput.value = kd[i] ?? 5;
+      if (kdVal) kdVal.textContent = Number(kdInput.value).toFixed(1);
+    }
+  }
+}
+
+function getMitKp() {
+  const n = joints.length;
+  if (!state.mitKp || state.mitKp.length !== n) {
+    return joints.map((j) => j.mitKp ?? 50);
+  }
+  return state.mitKp;
+}
+
+function getMitKd() {
+  const n = joints.length;
+  if (!state.mitKd || state.mitKd.length !== n) {
+    return joints.map((j) => j.mitKd ?? 5);
+  }
+  return state.mitKd;
+}
+
+let _mitSyncDebounce = null;
+async function syncMitParamsToBackend() {
+  if (!state.backendOnline) return;
+  clearTimeout(_mitSyncDebounce);
+  _mitSyncDebounce = setTimeout(async () => {
+    try {
+      await apiJson("/control/mode", {
+        method: "POST",
+        body: { mode: "mit", kp: getMitKp(), kd: getMitKd() },
+        timeoutMs: 3000,
+      });
+    } catch (_) {}
+  }, 400);
+}
+
+// ── 初始化 ──────────────────────────────────────────────────────
+
 async function init() {
   resizeRenderer();
   renderJoints();
+  initControlModeUI();
   bindControls();
   applyTranslations();
   setActiveView("control");
